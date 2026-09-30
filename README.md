@@ -142,6 +142,11 @@ The container listens on port `8000`, persists SQLite data in the `shortener-dat
 4. Approve the release and inspect `.agentic/releases/RUN_ID/manifest.json`.
 5. Review events and metrics, then exercise local rollback.
 
+## Demo materials
+
+- [Shortener API smoke requests](examples/shortener.http) for the VS Code REST Client.
+- [Interview walkthrough](docs/interview-walkthrough.md) with a timed demo sequence, commands, and key talking points.
+
 ## Scope boundary
 
 This is a reproducible prototype, not a production deployment. Its agent backend is deterministic and local. There is no external model call, cloud deployment, user authentication, distributed rate limiter, multi-region database, or external SLO telemetry backend. Read the risk notes before extending it.
