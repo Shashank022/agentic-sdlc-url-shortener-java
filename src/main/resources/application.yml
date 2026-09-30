@@ -1,0 +1,21 @@
+server:
+  port: ${SERVER_PORT:8000}
+  error:
+    include-message: never
+
+shortener:
+  database-path: ${SHORTENER_DB_PATH:./data/shortener.sqlite3}
+  public-base-url: ${SHORTENER_PUBLIC_BASE_URL:}
+  create-limit: ${SHORTENER_CREATE_LIMIT:60}
+  create-window-seconds: ${SHORTENER_CREATE_WINDOW_SECONDS:60}
+  max-expiry-seconds: ${SHORTENER_MAX_EXPIRY_SECONDS:31536000}
+
+spring:
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      fail-on-unknown-properties: true
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%thread] %logger{36} %msg%n"

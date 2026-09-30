@@ -1,0 +1,10 @@
+.git
+.idea
+.vscode
+target
+.agentic
+data
+upload
+.env
+*.sqlite3
+*.egg-info
