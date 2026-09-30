@@ -1,0 +1,23 @@
+services:
+  shortener:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SHORTENER_DB_PATH: /data/shortener.sqlite3
+      SHORTENER_CREATE_LIMIT: ${SHORTENER_CREATE_LIMIT:-60}
+      SHORTENER_CREATE_WINDOW_SECONDS: ${SHORTENER_CREATE_WINDOW_SECONDS:-60}
+      SHORTENER_MAX_EXPIRY_SECONDS: ${SHORTENER_MAX_EXPIRY_SECONDS:-31536000}
+    volumes:
+      - shortener-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  shortener-data:
