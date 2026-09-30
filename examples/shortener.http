@@ -1,0 +1,46 @@
+# Run the application first with `docker compose up --build` (default URL: http://localhost:8000).
+# This file uses the VS Code REST Client response-variable syntax.
+
+@baseUrl = http://localhost:8000
+
+### Liveness
+GET {{baseUrl}}/health/live
+
+### Readiness (also checks the database)
+GET {{baseUrl}}/health/ready
+
+### Create a short link
+# @name createLink
+POST {{baseUrl}}/api/v1/links
+Content-Type: application/json
+
+{
+  "target_url": "https://example.com/docs",
+  "expires_in_seconds": 3600
+}
+
+### Follow the new link (a successful redirect increments click_count)
+GET {{baseUrl}}/r/{{createLink.response.body.code}}
+
+### Read aggregate statistics after the redirect
+GET {{baseUrl}}/api/v1/links/{{createLink.response.body.code}}/stats
+
+### Optional custom alias
+POST {{baseUrl}}/api/v1/links
+Content-Type: application/json
+
+{
+  "target_url": "https://example.com/interview",
+  "custom_alias": "interview-demo"
+}
+
+### Validation error example (expected: 422)
+POST {{baseUrl}}/api/v1/links
+Content-Type: application/json
+
+{
+  "target_url": "javascript:alert(1)"
+}
+
+### Missing-link example (expected: 404)
+GET {{baseUrl}}/r/does-not-exist
