@@ -7,10 +7,13 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.TimeUnit;
 
 /** Compiles and runs every Maven test in the isolated candidate with a fixed executable and bounded timeout. */
 public class MavenTestStageRunner implements TestStageRunner {
+    private static final Pattern TEST_COUNT = Pattern.compile("<testsuite\\b[^>]*\\btests=\"(\\d+)\"");
     private static final List<String> COMMAND = List.of("mvn", "--batch-mode", "--no-transfer-progress", "test");
     private final List<String> command;
     private final Duration timeout;
@@ -28,6 +31,7 @@ public class MavenTestStageRunner implements TestStageRunner {
     @Override
     public Map<String, Object> run(Path workspace) throws Exception {
         long started = System.nanoTime();
+        CandidateWorkspace.deleteTree(workspace.resolve("target/surefire-reports"));
         Process process;
         try {
             process = new ProcessBuilder(command).directory(workspace.toFile()).redirectErrorStream(true).start();
@@ -49,9 +53,30 @@ public class MavenTestStageRunner implements TestStageRunner {
         reader.join(1000);
         String output = captured.toString(StandardCharsets.UTF_8);
         if (output.length() > 5000) output = output.substring(output.length() - 5000);
-        return Map.of("status", process.exitValue() == 0 ? "passed" : "failed",
-                "exit_code", process.exitValue(), "duration_seconds", secondsSince(started),
+        int testCount = completedTestCount(workspace);
+        boolean passed = process.exitValue() == 0 && testCount > 0;
+        if (process.exitValue() == 0 && testCount == 0) {
+            output = (output + "\nNo executed Maven test cases were found in Surefire reports.").strip();
+        }
+        return Map.of("status", passed ? "passed" : "failed",
+                "exit_code", process.exitValue(), "test_count", testCount, "duration_seconds", secondsSince(started),
                 "command", command, "output_tail", output);
+    }
+
+    private static int completedTestCount(Path workspace) {
+        Path reports = workspace.resolve("target/surefire-reports");
+        if (!java.nio.file.Files.isDirectory(reports)) return 0;
+        int total = 0;
+        try (var files = java.nio.file.Files.list(reports)) {
+            for (Path report : files.filter(path -> path.getFileName().toString().startsWith("TEST-")
+                    && path.getFileName().toString().endsWith(".xml")).toList()) {
+                Matcher matcher = TEST_COUNT.matcher(java.nio.file.Files.readString(report));
+                if (matcher.find()) total += Integer.parseInt(matcher.group(1));
+            }
+        } catch (IOException exception) {
+            return 0;
+        }
+        return total;
     }
 
     private static double secondsSince(long started) {

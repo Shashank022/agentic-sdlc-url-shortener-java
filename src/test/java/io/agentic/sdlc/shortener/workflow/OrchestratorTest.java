@@ -67,6 +67,49 @@ class OrchestratorTest {
     }
 
     @Test
+    void greenfieldCanCreateAPathThatExistsOnlyInTheOriginalCheckout() throws Exception {
+        Path workspace = workspace("greenfield-collision");
+        String applicationPath = "src/main/java/io/agentic/sdlc/shortener/ShortenerApplication.java";
+        String generatedApplication = "package io.agentic.sdlc.shortener; public class ShortenerApplication {}\n";
+        AgentBackend backend = new PassingBackend() {
+            @Override
+            public Map<String, Object> execute(String stageId, AgentContext context) throws Exception {
+                if (stageId.equals("implementation")) {
+                    List<?> criteria = (List<?>) context.priorOutputs().get("intake").get("acceptance_criteria");
+                    List<String> ids = new ArrayList<>();
+                    for (int index = 0; index < criteria.size(); index++) ids.add("AC-" + (index + 1));
+                    return proposal(context, List.of(
+                            change(applicationPath, "create", generatedApplication, ids,
+                                    "Create the entry point in the empty greenfield candidate."),
+                            change("src/test/java/io/agentic/sdlc/shortener/ShortenerApplicationTest.java", "create",
+                                    "package io.agentic.sdlc.shortener;\n"
+                                            + "import static org.junit.jupiter.api.Assertions.assertNotNull;\n"
+                                            + "import org.junit.jupiter.api.Test;\n"
+                                            + "class ShortenerApplicationTest { @Test void entryPointCanBeCreated() { assertNotNull(new ShortenerApplication()); } }\n",
+                                    ids, "Add a generated regression test.")));
+                }
+                return super.execute(stageId, context);
+            }
+        };
+        Orchestrator orchestrator = orchestrator(workspace, backend);
+        String runId = String.valueOf(orchestrator.createRun("greenfield", Map.of()).get("run_id"));
+
+        Map<String, Object> review = orchestrator.execute(runId);
+        assertEquals("changes", review.get("pending_checkpoint"));
+        Map<?, ?> implementation = (Map<?, ?>) stage(review, "implementation").get("output");
+        String diff = String.valueOf(implementation.get("diff"));
+        assertTrue(diff.contains("--- /dev/null\n+++ b/" + applicationPath));
+        assertTrue(diff.contains("+" + generatedApplication.stripTrailing()));
+        assertFalse(diff.contains("SpringApplication.run"));
+
+        orchestrator.approve(runId, "changes", "reviewer", "Review the clean greenfield source diff.", "approve");
+        orchestrator.execute(runId);
+        Path candidate = workspace.resolve(".agentic/runs/" + runId + "/candidate");
+        assertEquals(generatedApplication, Files.readString(candidate.resolve(applicationPath)));
+        assertFalse(Files.exists(candidate.resolve("src/main/java/io/agentic/sdlc/shortener/api/LinkController.java")));
+    }
+
+    @Test
     void ambiguousRequestPausesUntilMeasurableCriteriaAreRevised() throws Exception {
         Path workspace = workspace("ambiguous");
         Orchestrator orchestrator = orchestrator(workspace, new PassingBackend());
@@ -185,6 +228,20 @@ class OrchestratorTest {
         assertEquals(1L, ((Number) orchestrator.metrics().get("build_failures")).longValue());
         assertEquals(1L, ((Number) orchestrator.metrics().get("successful_repairs")).longValue());
         assertTrue(orchestrator.events(runId).stream().anyMatch(event -> event.eventType().equals("REPAIR_RECOVERED")));
+        WorkflowEvent releaseReview = orchestrator.events(runId).stream()
+                .filter(event -> event.eventType().equals("APPROVAL_REQUESTED")
+                        && "release".equals(event.payload().get("checkpoint")))
+                .findFirst().orElseThrow();
+        String finalDiff = String.valueOf(releaseReview.payload().get("final_diff"));
+        assertTrue(finalDiff.contains("return \"fixed\""));
+        assertFalse(finalDiff.contains("return \"initial\""));
+        assertTrue(((List<?>) releaseReview.payload().get("changed_files")).contains(
+                "src/main/java/io/agentic/sdlc/shortener/generated/RunMarker.java"));
+        String reviewedFingerprint = String.valueOf(releaseReview.payload().get("candidate_fingerprint"));
+        orchestrator.approve(runId, "release", "reviewer", "Review the repaired candidate diff and passing validation.", "approve");
+        assertEquals(reviewedFingerprint, stage(orchestrator.summary(runId), "release_approval").get("output") instanceof Map<?, ?> approval
+                ? approval.get("candidate_fingerprint") : null);
+        assertEquals("SUCCEEDED", orchestrator.execute(runId).get("status"));
     }
 
     @Test
@@ -374,7 +431,7 @@ class OrchestratorTest {
     }
 
     private static Map<String, Object> validation(String status, int exitCode, String output) {
-        return Map.of("status", status, "exit_code", exitCode, "duration_seconds", 0.01,
+        return Map.of("status", status, "exit_code", exitCode, "test_count", 1, "duration_seconds", 0.01,
                 "command", List.of("mvn", "--batch-mode", "--no-transfer-progress", "test"), "output_tail", output);
     }
 

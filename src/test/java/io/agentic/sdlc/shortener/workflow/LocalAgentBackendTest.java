@@ -74,7 +74,8 @@ class LocalAgentBackendTest {
                 Map.of("apply_changes", Map.of("baseline_modified", false))));
         assertEquals("failed", privacyViolation.get("status"));
         assertEquals(false, ((Map<?, ?>) privacyViolation.get("checks")).get("visitor_ip_not_persisted"));
-        Map<String, Object> validation = Map.of("status", "passed", "exit_code", 0, "command", List.of("mvn", "test"), "output_tail", "BUILD SUCCESS");
+        Map<String, Object> validation = Map.of("status", "passed", "exit_code", 0, "test_count", 1,
+                "command", List.of("mvn", "test"), "output_tail", "BUILD SUCCESS");
         Map<String, Object> blocked = agent.execute("release_readiness", context("greenfield", Map.of(), Map.of(
                 "tests", Map.of("status", "failed", "exit_code", 1), "repair", Map.of("status", "failed", "final_validation", Map.of("status", "failed", "exit_code", 1)),
                 "security_review", security, "implementation", Map.of("criterion_traceability", List.of()),

@@ -79,14 +79,47 @@ public final class CandidateWorkspace {
     }
 
     public static String diff(Path baseline, List<ProposedChange> changes) throws IOException {
+        return diff(baseline, changes, false);
+    }
+
+    public static String diff(Path baseline, List<ProposedChange> changes, boolean emptyBaseline) throws IOException {
         StringBuilder result = new StringBuilder();
         for (ProposedChange change : changes) {
             Path oldFile = baseline.toAbsolutePath().normalize().resolve(change.path()).normalize();
             ensureNoSymlinkParents(baseline.toAbsolutePath().normalize(), oldFile);
-            List<String> oldLines = Files.isRegularFile(oldFile, java.nio.file.LinkOption.NOFOLLOW_LINKS) ? Files.readAllLines(oldFile) : List.of();
+            List<String> oldLines = !emptyBaseline && Files.isRegularFile(oldFile, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    ? Files.readAllLines(oldFile) : List.of();
             List<String> newLines = change.operation().equals("delete") ? List.of() : change.content().lines().toList();
             result.append("--- ").append(change.operation().equals("create") ? "/dev/null" : "a/" + change.path()).append('\n');
             result.append("+++ ").append(change.operation().equals("delete") ? "/dev/null" : "b/" + change.path()).append('\n');
+            result.append("@@ complete-file diff @@\n");
+            oldLines.forEach(line -> result.append('-').append(line).append('\n'));
+            newLines.forEach(line -> result.append('+').append(line).append('\n'));
+        }
+        return result.toString();
+    }
+
+    /** Renders the final candidate state against its original source baseline for release review. */
+    public static String diffSnapshot(Path baseline, Path candidate, List<String> changedPaths,
+                                      boolean emptyBaseline) throws IOException {
+        Path safeBaseline = baseline.toAbsolutePath().normalize();
+        Path safeCandidate = candidate.toAbsolutePath().normalize();
+        StringBuilder result = new StringBuilder();
+        for (String changedPath : changedPaths.stream().distinct().toList()) {
+            ChangeSet.validatePath(changedPath);
+            Path oldFile = safeBaseline.resolve(changedPath).normalize();
+            Path newFile = safeCandidate.resolve(changedPath).normalize();
+            if (!oldFile.startsWith(safeBaseline) || !newFile.startsWith(safeCandidate)) {
+                throw new IOException("Review diff path escaped its workspace.");
+            }
+            ensureNoSymlinkParents(safeBaseline, oldFile);
+            ensureNoSymlinkParents(safeCandidate, newFile);
+            boolean hasOld = !emptyBaseline && Files.isRegularFile(oldFile, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            boolean hasNew = Files.isRegularFile(newFile, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            List<String> oldLines = hasOld ? Files.readAllLines(oldFile) : List.of();
+            List<String> newLines = hasNew ? Files.readAllLines(newFile) : List.of();
+            result.append("--- ").append(hasOld ? "a/" + changedPath : "/dev/null").append('\n');
+            result.append("+++ ").append(hasNew ? "b/" + changedPath : "/dev/null").append('\n');
             result.append("@@ complete-file diff @@\n");
             oldLines.forEach(line -> result.append('-').append(line).append('\n'));
             newLines.forEach(line -> result.append('+').append(line).append('\n'));

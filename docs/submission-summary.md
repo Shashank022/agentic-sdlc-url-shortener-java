@@ -12,7 +12,7 @@ The original checkout remains unchanged. Greenfield candidates start with the Ma
 2. Model work as a validated DAG, with security review and documentation joining after candidate validation.
 3. Keep provider calls separate from orchestration policy. A provider proposes changes; the orchestrator validates paths, acceptance-criterion links, approval hashes, and validation evidence.
 4. Use a disposable candidate copy for all generated writes. This makes rollback a safe candidate discard and lets the original source fingerprint prove no working-tree change occurred.
-5. Require explicit review of the source diff before apply and of build/security/documentation evidence before promotion.
+5. Require explicit review of the source diff before apply and of the final candidate diff (including repair changes), build/security/documentation evidence before promotion.
 6. Preserve prior run artifacts when request or source changes trigger replanning.
 
 The offline backend can inspect repository code and run policy checks. If no model endpoint exists, or model generation fails, code generation and repair report incomplete and the workflow cannot pass readiness.
@@ -28,7 +28,9 @@ The offline backend can inspect repository code and run policy checks. If no mod
 
 ## Validation
 
-The candidate runner executes `mvn --batch-mode --no-transfer-progress test` from the candidate directory with a bounded timeout. It stores command, exit code, elapsed duration, and captured output. Missing Maven, timeout, nonzero exit, absent evidence, absent criterion-linked tests, failed security policy, or missing final documentation blocks release readiness. Build failures are forwarded to repair, which must apply a constrained patch and rerun the same test command within the configured attempt limit.
+The candidate runner executes `mvn --batch-mode --no-transfer-progress test` from the candidate directory with a bounded timeout. It stores command, exit code, executed-test count, elapsed duration, and captured output. Missing Maven, timeout, nonzero exit, zero executed tests, absent evidence, absent criterion-linked tests, failed security policy, or missing final documentation blocks release readiness. Build failures are forwarded to repair, which must apply a constrained patch and rerun the same test command within the configured attempt limit.
+
+The greenfield, brownfield, and ambiguous scenario files are runbooks. Actual provider-backed execution artifacts must be captured from the exact submitted revision to claim all three demonstrations; unit tests use test backends and are not presented as those scenario runs.
 
 The repository quality gate is `mvn clean verify`; GitHub Actions enforces the same build and JaCoCo coverage threshold. Local Maven is not bundled; see `docs/validation.md` for exact checks.
 

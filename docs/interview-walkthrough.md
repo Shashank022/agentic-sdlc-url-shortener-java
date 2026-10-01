@@ -65,11 +65,11 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-The approved operations are applied to `.agentic/runs/RUN_ID/candidate/`; the repository checkout remains unchanged. The fixed Maven runner compiles candidate source and runs the full test suite. On failure, the repair agent receives the output and current candidate source, may make at most two reviewed-scope corrections, and must pass the build again. Security and documentation then run against the validated candidate.
+The approved operations are applied to `.agentic/runs/RUN_ID/candidate/`; the repository checkout remains unchanged. The fixed Maven runner compiles candidate source, runs the full test suite, and requires a positive executed-test count. On failure, the repair agent receives the output and current candidate source, may make at most two bounded corrections, and must pass the build again. Security and documentation then run against the validated candidate.
 
 ### 4. Review readiness and promote locally
 
-At the `release` checkpoint, inspect `release_readiness.json`, `repair.json`, `security_review.json`, and `engineering_summary.md`. The local promotion copies the verified source and evidence to `.agentic/releases/RUN_ID/` after a second named approval:
+At the `release` checkpoint, inspect `release_readiness.json`, especially its final candidate diff (including repair changes), changed files, risks, test plan, and validation evidence. Also inspect `repair.json`, `security_review.json`, and `engineering_summary.md`. The release approval is bound to the final candidate fingerprint; local promotion copies that reviewed source and evidence to `.agentic/releases/RUN_ID/`:
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \

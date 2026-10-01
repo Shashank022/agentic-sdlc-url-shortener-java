@@ -65,7 +65,7 @@ class OpenAiCompatibleAgentBackendTest {
             OpenAiCompatibleAgentBackend backend = new OpenAiCompatibleAgentBackend(
                     URI.create("http://127.0.0.1:" + malformed.getAddress().getPort() + "/v1"),
                     "test-model", "", Duration.ofSeconds(3));
-            assertThrows(Exception.class, () -> backend.execute("intake", context()));
+            assertThrows(AgentUnavailable.class, () -> backend.execute("intake", context()));
         } finally {
             malformed.stop(0);
         }

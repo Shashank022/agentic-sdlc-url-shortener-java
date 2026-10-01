@@ -252,7 +252,10 @@ public class LocalAgentBackend implements AgentBackend {
         Map<String, Object> intake = context.priorOutputs().getOrDefault("intake", Map.of());
         Map<String, Object> requirementApproval = context.priorOutputs().getOrDefault("requirement_approval", Map.of());
         List<String> blockers = new ArrayList<>();
-        if (!"passed".equals(tests.get("status")) || !(tests.get("exit_code") instanceof Number code) || code.intValue() != 0) blockers.add("Candidate compilation/tests did not pass with exit-code evidence.");
+        if (!"passed".equals(tests.get("status")) || !(tests.get("exit_code") instanceof Number code)
+                || code.intValue() != 0 || !(tests.get("test_count") instanceof Number count) || count.intValue() < 1) {
+            blockers.add("Candidate compilation/tests did not pass with executed-test evidence.");
+        }
         if (!"passed".equals(security.get("status"))) blockers.add("Security policy checks did not pass.");
         if (!("not_needed".equals(repair.get("status")) || "recovered".equals(repair.get("status")))) blockers.add("Bounded repair did not produce a validated candidate.");
         for (Object item : list(implementation.get("criterion_traceability"))) {

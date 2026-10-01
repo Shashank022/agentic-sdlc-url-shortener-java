@@ -39,9 +39,9 @@ Events link `RUN_CREATED` and the requirement fingerprint to `PATCH_PROPOSED`, `
 | Requirements and assumptions | Contextual intake | Missing criteria pause for clarification. A request cannot be approved for implementation until it contains measurable acceptance criteria. |
 | Source changes | Engineer proposes full-file changes and tests | Reviewer sees the exact diff, file list, criterion links, risks, and test plan. Approval is bound to the proposal hash. |
 | Candidate application | Orchestrator policy | Only allowlisted Java files are written in `.agentic/runs/{run_id}/candidate`; baseline fingerprint must still match. |
-| Validation and repair | Fixed Maven runner and contextual repair agent | Full `mvn --batch-mode --no-transfer-progress test`, bounded output/timeout, at most two repair attempts by default, and rerun after each repair. |
+| Validation and repair | Fixed Maven runner and contextual repair agent | Full `mvn --batch-mode --no-transfer-progress test`, bounded output/timeout, positive Surefire executed-test count, at most two repair attempts by default, and rerun after each repair. |
 | Readiness | Orchestrator policy | Requires complete passing build evidence, a passing source policy scan, generated regression tests for every criterion, and engineering documentation. |
-| Local promotion | No agent authority | A named reviewer approves readiness evidence before immutable source/evidence bundle promotion. No production deployment tool exists. |
+| Local promotion | No agent authority | A named reviewer sees the final candidate diff (including repair changes), risks, test plan and validation evidence before approving immutable source/evidence bundle promotion. No production deployment tool exists. |
 | Rejection, failure, and rollback | No model discretion | Candidate copies are discarded on denial, failed readiness, or safe stop. Rollback restores the previous local release pointer and verifies the original checkout fingerprint. |
 
 The approval CLI records an actor, rationale, decision, and time in SQLite. This prototype does not authenticate that actor; deployments need identity integration before using the gate as an organizational access-control system.
@@ -58,7 +58,7 @@ The approval CLI records an actor, rationale, decision, and time in SQLite. This
 
 ## Metrics and operational limits
 
-The `metrics` command derives counts from workflow events and terminal run states:
+The `metrics` command derives counts from workflow events and terminal run states. A zero-test Maven run is recorded as failed even when Maven exits zero:
 
 - Success and retry rates use completed workflow runs.
 - Code-generation attempts come from actual implementation calls.

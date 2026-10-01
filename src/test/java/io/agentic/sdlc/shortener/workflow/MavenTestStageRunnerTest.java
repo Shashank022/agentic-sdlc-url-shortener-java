@@ -15,14 +15,27 @@ class MavenTestStageRunnerTest {
 
     @Test
     void returnsCapturedOutputAndTheActualExitStatus() throws Exception {
-        Map<String, Object> passed = new MavenTestStageRunner(List.of("/bin/echo", "suite passed"), Duration.ofSeconds(2)).run(workspace);
+        Map<String, Object> passed = new MavenTestStageRunner(List.of("/bin/sh", "-c",
+                "echo suite passed; mkdir -p target/surefire-reports; printf '<testsuite tests=\"2\"/>' > target/surefire-reports/TEST-DemoTest.xml"),
+                Duration.ofSeconds(2)).run(workspace);
         assertEquals("passed", passed.get("status"));
         assertEquals(0, passed.get("exit_code"));
+        assertEquals(2, passed.get("test_count"));
         assertTrue(String.valueOf(passed.get("output_tail")).contains("suite passed"));
 
         Map<String, Object> failed = new MavenTestStageRunner(List.of("/bin/sh", "-c", "echo failed; exit 3"), Duration.ofSeconds(2)).run(workspace);
         assertEquals("failed", failed.get("status"));
         assertEquals(3, failed.get("exit_code"));
+    }
+
+    @Test
+    void rejectsSuccessfulCommandWhenNoMavenTestsWereExecuted() throws Exception {
+        java.nio.file.Path staleReports = java.nio.file.Files.createDirectories(workspace.resolve("target/surefire-reports"));
+        java.nio.file.Files.writeString(staleReports.resolve("TEST-StaleTest.xml"), "<testsuite tests=\"9\"/>");
+        Map<String, Object> noTests = new MavenTestStageRunner(List.of("/bin/echo", "BUILD SUCCESS"), Duration.ofSeconds(2)).run(workspace);
+        assertEquals("failed", noTests.get("status"));
+        assertEquals(0, noTests.get("test_count"));
+        assertTrue(String.valueOf(noTests.get("output_tail")).contains("No executed Maven test cases"));
     }
 
     @Test

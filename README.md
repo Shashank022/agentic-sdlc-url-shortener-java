@@ -12,7 +12,7 @@ Requirement analysis and code generation use an OpenAI-compatible chat-completio
 | Brownfield and greenfield | Brownfield analyzes the checked-out Java classes, methods, imports, routes, and tests. Greenfield candidates start from the Maven starter `pom.xml`, without copying the existing application source. |
 | Reviewable engineering changes | `implementation.json` contains complete-file operations, changed paths, a diff, criterion links, risks, and test plan. Paths and operation sizes are checked before review. |
 | Human governance | Ambiguous requirements pause for measurable criteria. Reviewers approve the exact diff before it is applied to an isolated candidate and approve the verified bundle before local promotion. |
-| Validation and repair | Candidate validation runs the full Maven test lifecycle, captures command/exit/output, and blocks readiness when evidence is missing or failing. Failed validation is sent to a bounded repair loop (two attempts by default). |
+| Validation and repair | Candidate validation runs the full Maven test lifecycle, captures command/exit/output and executed-test counts, and blocks readiness when tests did not run or evidence is missing/failing. Failed validation is sent to a bounded repair loop (two attempts by default). |
 | Lineage and replanning | SQLite run state, trace IDs, artifact hashes, append-only events, approval history, and archived revisions under `.agentic/`. Requirement or source changes invalidate downstream decisions and evidence. |
 | Rollback and safe stop | Rejected/exhausted candidates are discarded; source fingerprints verify the original checkout remained unchanged. Release rollback restores the previous local pointer and records baseline verification. |
 | Execution metrics | CLI reports code-generation attempts, candidate builds/failures, repair attempts/recoveries/MTTR, source-verified rollbacks, and end-to-end latency. |
@@ -98,7 +98,7 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-After the candidate tests, security review, and documentation complete, inspect `release_readiness` and approve `--checkpoint release` to promote the local bundle. The promoted candidate source is copied to `.agentic/releases/RUN_ID/source/`.
+After the candidate tests, security review, and documentation complete, inspect the final candidate diff (including any repair), risks, test plan, and validation evidence in `release_readiness`; then approve `--checkpoint release` to promote the local bundle. The promoted candidate source is copied to `.agentic/releases/RUN_ID/source/`.
 
 Brownfield inspects existing classes, methods, routes, and tests before asking the model for a minimal patch. The same diff-approval, isolated build, repair, and release gates apply:
 
@@ -139,7 +139,7 @@ mvn test
 mvn verify
 ```
 
-The workflow test stage runs `mvn --batch-mode --no-transfer-progress test` against the candidate, which compiles main and test sources and runs the full suite. Missing Maven, timeout, nonzero exit, or absent output evidence blocks readiness. Separately, `mvn verify` runs the repository JUnit suite and enforces the JaCoCo line-coverage gate. Tests cover source isolation, safe change paths, exact-diff approval, repair recovery, source/request replanning, fallback, ambiguous requirements, readiness blocking, promotion, and verified rollback. GitHub Actions runs `mvn clean verify` on pushes to `main` and pull requests.
+The workflow test stage runs `mvn --batch-mode --no-transfer-progress test` against the candidate, which compiles main and test sources and runs the full suite. Missing Maven, timeout, nonzero exit, zero executed tests, or absent output evidence blocks readiness. Separately, `mvn verify` runs the repository JUnit suite and enforces the JaCoCo line-coverage gate. Tests cover source isolation, safe change paths, exact-diff approval, repair recovery, source/request replanning, fallback, ambiguous requirements, readiness blocking, promotion, and verified rollback. GitHub Actions runs `mvn clean verify` on pushes to `main` and pull requests.
 
 ## Docker
 
@@ -154,7 +154,7 @@ The container listens on port `8000`, persists SQLite data in the `shortener-dat
 1. Read [Architecture and orchestration model](docs/architecture.md).
 2. Run the ambiguous scenario and confirm it stops before implementation until criteria are revised.
 3. Run a concrete scenario and inspect the exact source/test diff before approving `changes`.
-4. Review build/repair evidence and `release_readiness`, approve the release, and inspect `.agentic/releases/RUN_ID/source/`.
+4. Review the final candidate diff, repair evidence and `release_readiness`, approve the release, and inspect `.agentic/releases/RUN_ID/source/`.
 5. Review events and execution-derived metrics, then exercise local rollback.
 
 ## Demo materials

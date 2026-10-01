@@ -82,10 +82,18 @@ public final class OpenAiCompatibleAgentBackend implements AgentBackend {
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new AgentUnavailable("Contextual model endpoint returned HTTP " + response.statusCode() + ".");
         }
-        JsonNode envelope = json.readTree(response.body());
-        JsonNode content = envelope.path("choices").path(0).path("message").path("content");
-        if (!content.isTextual()) throw new AgentUnavailable("Contextual model returned no JSON message content.");
-        JsonNode output = json.readTree(content.asString());
+        JsonNode envelope;
+        JsonNode output;
+        try {
+            envelope = json.readTree(response.body());
+            JsonNode content = envelope.path("choices").path(0).path("message").path("content");
+            if (!content.isTextual()) throw new AgentUnavailable("Contextual model returned no JSON message content.");
+            output = json.readTree(content.asString());
+        } catch (AgentUnavailable unavailable) {
+            throw unavailable;
+        } catch (Exception exception) {
+            throw new AgentUnavailable("Contextual model returned malformed JSON.");
+        }
         if (output == null || !output.isObject()) throw new AgentUnavailable("Contextual model output must be a JSON object.");
         @SuppressWarnings("unchecked")
         Map<String, Object> parsed = json.readValue(output.toString(), Map.class);

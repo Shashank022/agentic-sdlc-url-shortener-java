@@ -25,7 +25,7 @@ After the named reviewer approves the exact implementation diff, the workflow ap
 mvn --batch-mode --no-transfer-progress test
 ```
 
-from that candidate directory. This compiles application and test sources, runs all Maven tests, and captures the command, exit code, duration, and output tail. A fixed timeout and output cap apply. A missing executable, timeout, nonzero exit, missing evidence, or no test file for an acceptance criterion blocks readiness.
+from that candidate directory. This compiles application and test sources, runs all Maven tests, and captures the command, exit code, executed-test count, duration, and output tail. A fixed timeout and output cap apply. A missing executable, timeout, nonzero exit, zero executed tests, missing evidence, or no generated test file for an acceptance criterion blocks readiness.
 
 If tests fail, the repair agent receives the error output and current candidate source. At most two patch attempts are accepted by default; every repair is path/criterion checked and followed by a new build/test execution. The original workspace is never repaired in place. Exhaustion blocks readiness and discards the candidate.
 
@@ -34,10 +34,11 @@ If tests fail, the repair agent receives the error output and current candidate 
 1. Confirm intake preserves submitted criteria and ambiguous requests pause.
 2. Check repository evidence identifies classes, methods, routes, imports, and existing test files.
 3. Inspect the proposed complete-file diff, rationale, acceptance-criterion IDs, risks, and generated test plan before approving `changes`.
-4. Verify the command, exit code, output tail, repair history, candidate security checks, and generated summary.
-5. Confirm readiness is policy-derived and the release manifest records the second approval.
-6. Exercise a request replan, stop, denied diff, exhausted repair, and release rollback; check revision archives and audit events.
+4. Verify the command, exit code, executed-test count, output tail, repair history, candidate security checks, and generated summary.
+5. At release approval, inspect the final source diff, including any repair changes, along with risks, test plan, and validation evidence.
+6. Confirm readiness is policy-derived and the release manifest records the second approval.
+7. Exercise a request replan, stop, denied diff, exhausted repair, and release rollback; check revision archives and audit events.
 
 ## Known validation limits
 
-The security review is intentionally small and deterministic; it is not a compliance claim or replacement for independent security testing. Candidate builds execute Maven plugins and generated tests, so use trusted repositories and isolated runners. Production use requires stronger OS/container sandboxing, identity-bound approval, resource/network policy, dependency scanning, and provider evaluation. The local development workspace in this session does not include Maven, so the project must be verified by the GitHub Actions CI after push.
+The security review is intentionally small and deterministic; it is not a compliance claim or replacement for independent security testing. Candidate builds execute Maven plugins and generated tests, so use trusted repositories and isolated runners. Production use requires stronger OS/container sandboxing, identity-bound approval, resource/network policy, dependency scanning, and provider evaluation. The scenario markdown files are reproducible run instructions; they are not substitutes for captured greenfield, brownfield, and ambiguous execution artifacts from the exact submitted revision. Run `mvn clean verify` and preserve real scenario outputs before claiming those demonstrations are complete.

@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -340,12 +341,19 @@ public class Orchestrator {
                                                      Map<String, Map<String, Object>> priorOutputs) throws IOException {
         List<String> criteria = strings(priorOutputs.getOrDefault("intake", Map.of()).get("acceptance_criteria"));
         List<ProposedChange> changes = ChangeSet.parse(output, criteria);
+        boolean greenfield = run.scenario.equals("greenfield");
         for (ProposedChange change : changes) {
+            if (greenfield) {
+                if (!change.operation().equals("create")) {
+                    throw new IllegalStateException("Greenfield candidates start from the Maven starter; every source operation must create a file.");
+                }
+                continue;
+            }
             boolean exists = CandidateWorkspace.safeRegularFile(workspace, change.path());
             if (change.operation().equals("create") && exists) throw new IllegalStateException("Create target already exists in the baseline: " + change.path());
             if (!change.operation().equals("create") && !exists) throw new IllegalStateException("Proposed " + change.operation() + " target is missing from the baseline: " + change.path());
         }
-        String diff = CandidateWorkspace.diff(workspace, changes);
+        String diff = CandidateWorkspace.diff(workspace, changes, greenfield);
         List<Map<String, Object>> traceability = new ArrayList<>();
         for (int index = 0; index < criteria.size(); index++) {
             String id = "AC-" + (index + 1);
@@ -419,10 +427,12 @@ public class Orchestrator {
                 }
                 List<ProposedChange> changes = ChangeSet.parse(patch, criteria, false);
                 CandidateWorkspace.apply(candidatePath(run.runId), changes);
+                List<Map<String, Object>> traceability = changes.stream().map(change -> Map.<String, Object>of(
+                        "path", change.path(), "criterion_ids", change.criterionIds(), "rationale", change.rationale())).toList();
                 store.appendEvent(run.runId, "REPAIR_ATTEMPT", "repair", backend.getClass().getSimpleName(), Map.of(
                         "attempt", attempt, "diagnosis", patch.getOrDefault("diagnosis", "not supplied"),
                         "changed_files", CandidateWorkspace.changedPaths(changes), "prior_exit_code", lastValidation.getOrDefault("exit_code", -1),
-                        "backend", backendDetails(backend)));
+                        "criterion_traceability", traceability, "backend", backendDetails(backend)));
                 AgentContext testContext = new AgentContext(candidatePath(run.runId), run.runId, run.scenario, run.request,
                         Map.copyOf(repairContextOutputs));
                 lastValidation = buildEvidence(run, backend.execute("tests", testContext));
@@ -431,6 +441,8 @@ public class Orchestrator {
                 evidence.put("attempt", attempt);
                 evidence.put("diagnosis", patch.getOrDefault("diagnosis", "not supplied"));
                 evidence.put("changed_files", CandidateWorkspace.changedPaths(changes));
+                evidence.put("risks", asList(patch.get("risks")));
+                evidence.put("criterion_traceability", traceability);
                 evidence.put("validation", lastValidation);
                 evidence.put("elapsed_seconds", elapsed(started) / 1000.0);
                 attempts.add(evidence);
@@ -482,11 +494,42 @@ public class Orchestrator {
                 && !"approved".equals(run.stage("requirement_approval").output.get("decision"))) {
             blockers.add("Requirement questions remain unresolved.");
         }
-        return Map.of("decision", blockers.isEmpty() ? "ready_for_human_review" : "blocked",
-                "blockers", blockers, "release_scope", "reviewable local source bundle; no deployment",
-                "changed_files", asList(implementation.get("changed_files")),
-                "test_validation", validation, "security_status", security.getOrDefault("status", "missing"),
-                "documentation_status", markdownStatus(documentation), "candidate_fingerprint", run.stage("apply_changes").output.getOrDefault("candidate_fingerprint", "missing"));
+        List<String> changedFiles = finalChangedFiles(implementation, repairResult);
+        String finalDiff = "";
+        String candidateFingerprint = "missing";
+        try {
+            finalDiff = CandidateWorkspace.diffSnapshot(workspace, candidatePath(run.runId), changedFiles,
+                    run.scenario.equals("greenfield"));
+            candidateFingerprint = CandidateWorkspace.fingerprint(candidatePath(run.runId));
+        } catch (IOException exception) {
+            blockers.add("Final candidate diff or fingerprint could not be produced for review.");
+        }
+        List<Object> risks = new ArrayList<>(asList(implementation.get("risks")));
+        for (Object item : asList(repairResult.get("attempt_history"))) {
+            if (item instanceof Map<?, ?> attempt) risks.addAll(asList(attempt.get("risks")));
+        }
+        Map<String, Object> readiness = new LinkedHashMap<>();
+        readiness.put("decision", blockers.isEmpty() ? "ready_for_human_review" : "blocked");
+        readiness.put("blockers", blockers);
+        readiness.put("release_scope", "reviewable local source bundle; no deployment");
+        readiness.put("changed_files", changedFiles);
+        readiness.put("final_diff", finalDiff);
+        readiness.put("risks", risks.stream().distinct().toList());
+        readiness.put("test_plan", asList(implementation.get("test_plan")));
+        readiness.put("test_validation", validation);
+        readiness.put("security_status", security.getOrDefault("status", "missing"));
+        readiness.put("documentation_status", markdownStatus(documentation));
+        readiness.put("candidate_fingerprint", candidateFingerprint);
+        return readiness;
+    }
+
+    private static List<String> finalChangedFiles(Map<String, Object> implementation, Map<String, Object> repair) {
+        LinkedHashSet<String> changed = new LinkedHashSet<>(strings(implementation.get("changed_files")));
+        changed.addAll(strings(repair.get("changed_files")));
+        for (Object item : asList(repair.get("attempt_history"))) {
+            if (item instanceof Map<?, ?> attempt) changed.addAll(strings(attempt.get("changed_files")));
+        }
+        return List.copyOf(changed);
     }
 
     private Map<String, Object> groundDocumentation(RunState run, Map<String, Object> output,
@@ -507,6 +550,14 @@ public class Orchestrator {
                     + "; source/test files: " + String.join(", ", strings(criterion.get("files"))) + " / "
                     + String.join(", ", strings(criterion.get("test_files"))));
         }
+        for (Object attempt : asList(repairResult.get("attempt_history"))) {
+            if (attempt instanceof Map<?, ?> repairAttempt) {
+                for (Object item : asList(repairAttempt.get("criterion_traceability"))) {
+                    if (item instanceof Map<?, ?> trace) lines.add("- Repair changed `" + trace.get("path") + "` for "
+                            + String.join(", ", strings(trace.get("criterion_ids"))) + ": " + trace.get("rationale"));
+                }
+            }
+        }
         lines.add("\n## Design decisions and trade-offs");
         for (Object item : asList(architecture.get("decisions"))) {
             if (item instanceof Map<?, ?> decision) lines.add("- " + (decision.containsKey("id") ? decision.get("id") : "decision") + ": "
@@ -518,7 +569,7 @@ public class Orchestrator {
         lines.add("- Run the application, when this candidate includes a Spring Boot entry point: `mvn spring-boot:run`.");
         lines.add("\n## Verified implementation and execution evidence");
         lines.add("- Scenario: `" + run.scenario + "`.");
-        lines.add("- Changed files: " + String.join(", ", strings(implementation.get("changed_files"))) + ".");
+        lines.add("- Changed files: " + String.join(", ", finalChangedFiles(implementation, repairResult)) + ".");
         lines.add("- Validation status: `" + validation.getOrDefault("status", "missing") + "`; exit code: `" + validation.getOrDefault("exit_code", "missing") + "`.");
         lines.add("- Validation command: `" + String.join(" ", strings(validation.get("command"))) + "`.");
         lines.add("- Validation output tail: `" + String.valueOf(validation.getOrDefault("output_tail", "missing")).replace("`", "'") + "`.");
@@ -563,7 +614,8 @@ public class Orchestrator {
 
     private static boolean validTestEvidence(Map<String, Object> validation) {
         return "passed".equals(validation.get("status")) && validation.get("exit_code") instanceof Number code
-                && code.intValue() == 0 && validation.get("command") instanceof List<?> command && !command.isEmpty()
+                && code.intValue() == 0 && validation.get("test_count") instanceof Number tests && tests.intValue() > 0
+                && validation.get("command") instanceof List<?> command && !command.isEmpty()
                 && validation.get("output_tail") instanceof String
                 && validation.get("candidate_fingerprint") instanceof String
                 && Boolean.TRUE.equals(validation.get("baseline_unchanged"));
@@ -663,9 +715,15 @@ public class Orchestrator {
             payload.put("proposal_sha256", proposal.getOrDefault("proposal_sha256", "missing"));
         }
         if (checkpoint.equals("release")) {
-            payload.put("readiness", run.stage("release_readiness").output);
+            Map<String, Object> readiness = run.stage("release_readiness").output;
+            payload.put("readiness", readiness);
+            payload.put("changed_files", readiness.getOrDefault("changed_files", List.of()));
+            payload.put("final_diff", readiness.getOrDefault("final_diff", ""));
+            payload.put("risks", readiness.getOrDefault("risks", List.of()));
+            payload.put("test_plan", readiness.getOrDefault("test_plan", List.of()));
             payload.put("validation", run.stage("repair").output.getOrDefault("final_validation", Map.of()));
             payload.put("limitations", asList(run.stage("security_review").output.get("limitations")));
+            payload.put("candidate_fingerprint", readiness.getOrDefault("candidate_fingerprint", "missing"));
         }
         store.appendEvent(run.runId, "APPROVAL_REQUESTED", stage.id(), "policy", payload);
         return true;
@@ -713,6 +771,9 @@ public class Orchestrator {
             output.put("actor", actor.trim());
             output.put("rationale", rationale.trim());
             if (checkpoint.equals("changes")) output.put("proposal_sha256", run.stage("implementation").output.get("proposal_sha256"));
+            if (checkpoint.equals("release")) {
+                output.put("candidate_fingerprint", run.stage("release_readiness").output.get("candidate_fingerprint"));
+            }
             StageState stage = run.stage(stageId);
             stage.output = output;
             if (approvalDecision.equals("approved")) {
@@ -1026,6 +1087,11 @@ public class Orchestrator {
         }
         Path candidate = candidatePath(run.runId);
         if (!Files.isDirectory(candidate)) throw new IllegalStateException("Verified candidate source is missing; release bundle cannot be promoted.");
+        String candidateFingerprint = CandidateWorkspace.fingerprint(candidate);
+        Object approvedFingerprint = run.stage("release_approval").output.get("candidate_fingerprint");
+        if (!(approvedFingerprint instanceof String approved) || !approved.equals(candidateFingerprint)) {
+            throw new IllegalStateException("Release approval does not match the final candidate reviewed by the human.");
+        }
         CandidateWorkspace.copyTree(candidate, staging.resolve("source"));
         Path pointer = stateRoot.resolve("current_release.json");
         Object previous = Files.exists(pointer) ? readJson(pointer) : null;
