@@ -1,21 +1,21 @@
 # Agentic SDLC URL Shortener (Java)
 
-A Java 17 / Spring Boot URL shortener paired with a persistent, governed SDLC workflow prototype. Its control plane models engineering work as a dependency graph with parallel validation, human approval gates, retries, fallback, replanning, audit history, safe stops, and local release rollback.
+A Java 17 / Spring Boot URL shortener paired with a persistent, governed SDLC workflow. The workflow turns requirements into a reviewable Java patch, applies the approved patch to an isolated candidate copy, compiles and tests that copy, performs bounded repair, and promotes the verified source bundle locally after a second human approval.
 
-The reference agents run deterministically and offline. `AgentBackend` is the seam for an optional model provider; approval policy, graph state, workspace boundaries, and release effects stay in the orchestrator. Agents cannot edit arbitrary source files or deploy to production.
+Requirement analysis and code generation use an OpenAI-compatible chat-completions endpoint when configured (including local Ollama). The offline backend inspects Java files and runs checks, but deliberately stops as incomplete at code generation and repair; it never turns missing model output into success. The original checkout remains unchanged: only allowlisted Java source and test operations are applied to `.agentic/runs/{run_id}/candidate`. This workflow can promote a local review bundle, but cannot deploy to production.
 
 ## Assignment coverage
 
 | Requirement | Evidence in this submission |
 | --- | --- |
-| Requirement understanding | `intake` records normalized scope, acceptance criteria, assumptions, and open questions. |
-| Task decomposition | `decomposition` emits owned tasks, dependencies, deliverables, and a critical path. |
-| Brownfield reasoning | `repo_reasoning` inspects Java classes, imports, Spring MVC routes, and data flow. |
-| Stateful, non-linear SDLC | `WorkflowGraph` validates a DAG; tests, security review, and documentation run concurrently and join before release readiness. |
-| Context and lineage | SQLite run state, trace IDs, output hashes, append-only events, approval history, and versioned artifacts under `.agentic/`. |
-| Human governance | Ambiguous requirements pause before implementation; local release promotion always requires an explicit reviewer decision. |
-| Retry, fallback, replan, rollback, safe stop | Bounded retry and provider fallback; source/request changes invalidate downstream state; operator stop is checked between stage groups; release pointer rollback is audited. |
-| Reliability metrics | CLI reports success and retry rates, retry and rollback counts, MTTR, and mean end-to-end latency. |
+| Contextual reasoning | Optional model receives the submitted requirement, prior stage outputs, Java source/test evidence, and validation logs. Outputs are JSON-validated; the offline fallback cannot fabricate code. |
+| Brownfield and greenfield | Brownfield analyzes the checked-out Java classes, methods, imports, routes, and tests. Greenfield candidates start from the Maven starter `pom.xml`, without copying the existing application source. |
+| Reviewable engineering changes | `implementation.json` contains complete-file operations, changed paths, a diff, criterion links, risks, and test plan. Paths and operation sizes are checked before review. |
+| Human governance | Ambiguous requirements pause for measurable criteria. Reviewers approve the exact diff before it is applied to an isolated candidate and approve the verified bundle before local promotion. |
+| Validation and repair | Candidate validation runs the full Maven test lifecycle, captures command/exit/output, and blocks readiness when evidence is missing or failing. Failed validation is sent to a bounded repair loop (two attempts by default). |
+| Lineage and replanning | SQLite run state, trace IDs, artifact hashes, append-only events, approval history, and archived revisions under `.agentic/`. Requirement or source changes invalidate downstream decisions and evidence. |
+| Rollback and safe stop | Rejected/exhausted candidates are discarded; source fingerprints verify the original checkout remained unchanged. Release rollback restores the previous local pointer and records baseline verification. |
+| Execution metrics | CLI reports code-generation attempts, candidate builds/failures, repair attempts/recoveries/MTTR, source-verified rollbacks, and end-to-end latency. |
 | Service quality | Spring MVC API, SQLite persistence, URL validation, expiry, aggregate analytics, health probes, rate limiting, tests, Docker, and CI. |
 | Trade-offs and limits | See [Architecture](docs/architecture.md), [Risks and trade-offs](docs/risk-and-tradeoffs.md), and [Validation](docs/validation.md). |
 | Engineering summary | [Submission summary](docs/submission-summary.md) records the design, artifacts, assumptions, validation, and boundaries. |
@@ -56,7 +56,19 @@ Configuration uses environment variables: `SHORTENER_DB_PATH`, `SHORTENER_PUBLIC
 
 ## Run the SDLC scenarios
 
-Build the executable jar first, then run the workflow CLI through the same application:
+Configure a model that supports the OpenAI-compatible `/v1/chat/completions` API. For a local Ollama endpoint, export its base URL and model name; for a remote provider, also set its API key. Never commit a real key.
+
+```bash
+export AGENT_BASE_URL=http://localhost:11434/v1
+export AGENT_MODEL=your-coding-model
+# Optional for providers that require a bearer token:
+export AGENT_API_KEY=your-local-or-provider-key
+export AGENT_TIMEOUT_SECONDS=120
+```
+
+Without `AGENT_BASE_URL`, the offline backend supports repository inspection but intentionally stops before code generation. This is a safe incomplete result, not a successful run.
+
+Build the executable jar, then run the workflow CLI through the same application:
 
 ```bash
 mvn -q package -DskipTests
@@ -65,7 +77,7 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc scenarios --workspace .
 ```
 
-Each command prints JSON with the run ID, stage states, pending checkpoint, artifact directory, and workflow metrics.
+Each command prints JSON with the run ID, stage states, pending checkpoint, artifact directory, and execution-derived workflow metrics.
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
@@ -73,20 +85,22 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc run --scenario greenfield --workspace .
 ```
 
-Greenfield proceeds through validation and pauses before local release promotion. Use its printed run ID to review, approve, and resume:
+Greenfield starts its candidate with only the Maven starter file. Review the generated source/test diff at the `changes` checkpoint, approve it, and resume. Build and repair evidence are recorded before the run pauses at `release`:
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
-  --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint release \
-  --actor "Reviewer" --rationale "Tests and policy checks passed; approve local artifact promotion."
+  --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint changes \
+  --actor "Reviewer" --rationale "I reviewed the proposed source diff, risks, and generated test plan."
 
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-Brownfield inspects the existing Java source before planning:
+After the candidate tests, security review, and documentation complete, inspect `release_readiness` and approve `--checkpoint release` to promote the local bundle. The promoted candidate source is copied to `.agentic/releases/RUN_ID/source/`.
+
+Brownfield inspects existing classes, methods, routes, and tests before asking the model for a minimal patch. The same diff-approval, isolated build, repair, and release gates apply:
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
@@ -94,7 +108,7 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc run --scenario brownfield --workspace .
 ```
 
-The ambiguous scenario pauses before implementation. A reviewer can accept explicit prototype assumptions, revise the request into measurable criteria, or stop the run:
+The ambiguous scenario stops for clarification before code generation. Approval alone cannot turn vague wording into acceptance criteria; revise it with measurable criteria, or stop the run:
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
@@ -103,17 +117,18 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
 
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
-  --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint requirements \
-  --actor "Reviewer" --rationale "Accept optional expiry and aggregate analytics without visitor identifiers."
+  --logging.level.root=ERROR sdlc revise RUN_ID --actor "Product owner" \
+  --request "Add optional expiry and privacy-preserving click analytics." \
+  --acceptance-criteria "Expired links return HTTP 410||Click counts are exposed without persisting visitor IP addresses"
 
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-The resumed run later stops at the separate release checkpoint. Each approval requires an actor and rationale; denial fails closed. Useful inspection and control commands include `status RUN_ID`, `events RUN_ID`, `list`, `metrics`, `stop RUN_ID --actor ... --reason ...`, `revise RUN_ID --actor ... --request ... --acceptance-criteria 'criterion one||criterion two'`, and `rollback-release RUN_ID --actor ... --rationale ...`.
+The revised run proceeds through code generation and pauses for exact-diff approval, then later pauses at release approval. Each approval requires an actor and rationale; denial fails closed. Useful inspection and control commands include `status RUN_ID`, `events RUN_ID`, `list`, `metrics`, `stop RUN_ID --actor ... --reason ...`, `revise RUN_ID --actor ... --request ... --acceptance-criteria 'criterion one||criterion two'`, and `rollback-release RUN_ID --actor ... --rationale ...`.
 
-Workflow projections and append-only event history live in `.agentic/state.sqlite3`. JSON stage artifacts are written to `.agentic/runs/RUN_ID/artifacts/`; local releases are written under `.agentic/releases/`. Promotion only replaces the local atomic pointer `.agentic/current_release.json`.
+Workflow projections and append-only event history live in `.agentic/state.sqlite3`. Stage artifacts and candidate workspaces live under `.agentic/runs/RUN_ID/`; revised requirements preserve prior artifacts under `revisions/`. Promotion stores the verified source and evidence under `.agentic/releases/` and replaces only `.agentic/current_release.json`.
 
 Walkthroughs are in [`docs/scenarios/`](docs/scenarios/).
 
@@ -124,7 +139,7 @@ mvn test
 mvn verify
 ```
 
-`mvn verify` runs the complete JUnit suite and enforces an 80% line-coverage minimum with JaCoCo. API integration, domain, graph validation, scenario lifecycle, approval, replan, retry/fallback, policy blocking, parallel execution, safe stop, promotion, and rollback are covered. GitHub Actions runs the same gate on pushes to `main` and pull requests.
+The workflow test stage runs `mvn --batch-mode --no-transfer-progress test` against the candidate, which compiles main and test sources and runs the full suite. Missing Maven, timeout, nonzero exit, or absent output evidence blocks readiness. Separately, `mvn verify` runs the repository JUnit suite and enforces the JaCoCo line-coverage gate. Tests cover source isolation, safe change paths, exact-diff approval, repair recovery, source/request replanning, fallback, ambiguous requirements, readiness blocking, promotion, and verified rollback. GitHub Actions runs `mvn clean verify` on pushes to `main` and pull requests.
 
 ## Docker
 
@@ -137,10 +152,10 @@ The container listens on port `8000`, persists SQLite data in the `shortener-dat
 ## Review order
 
 1. Read [Architecture and orchestration model](docs/architecture.md).
-2. Run the ambiguous scenario and inspect the requirements checkpoint.
-3. Approve the requirements, resume, and observe validation and documentation execute independently before joining at readiness.
-4. Approve the release and inspect `.agentic/releases/RUN_ID/manifest.json`.
-5. Review events and metrics, then exercise local rollback.
+2. Run the ambiguous scenario and confirm it stops before implementation until criteria are revised.
+3. Run a concrete scenario and inspect the exact source/test diff before approving `changes`.
+4. Review build/repair evidence and `release_readiness`, approve the release, and inspect `.agentic/releases/RUN_ID/source/`.
+5. Review events and execution-derived metrics, then exercise local rollback.
 
 ## Demo materials
 
@@ -149,4 +164,4 @@ The container listens on port `8000`, persists SQLite data in the `shortener-dat
 
 ## Scope boundary
 
-This is a reproducible prototype, not a production deployment. Its agent backend is deterministic and local. There is no external model call, cloud deployment, user authentication, distributed rate limiter, multi-region database, or external SLO telemetry backend. Read the risk notes before extending it.
+This is a governed engineering prototype, not a production deployment. The contextual provider is opt-in; fallback inspection is local and conservative. There is no cloud deployment capability, user authentication for the approval CLI, distributed rate limiter, multi-region database, or external SLO telemetry backend. Model-generated code is not inherently trustworthy; diff review, path policy, candidate compilation/tests, source scanning, and the release gate remain required. Read the risk notes before extending it.

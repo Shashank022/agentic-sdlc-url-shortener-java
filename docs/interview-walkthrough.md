@@ -1,6 +1,6 @@
 # Interview walkthrough
 
-This is a five-to-seven-minute path through the project. It shows the working API first, then the workflow's planning, human gates, validation, audit trail, and rollback.
+Use this five-to-seven-minute walkthrough to show a real requirement-to-patch path, candidate validation, governance, lineage, and rollback.
 
 ## Before the call
 
@@ -11,17 +11,20 @@ mvn clean verify
 docker compose up --build
 ```
 
-Run the requests in [`examples/shortener.http`](../examples/shortener.http) with the VS Code REST Client extension. The example creates a link, follows it, then reads aggregate click statistics. A successful redirect returns `302` and increments the count; expired links return `410`, while missing links return `404`.
-
-In another terminal, build the runnable jar for workflow commands:
+Run the requests in [`examples/shortener.http`](../examples/shortener.http) with the VS Code REST Client. In a separate terminal, configure an OpenAI-compatible model provider and build the CLI jar:
 
 ```bash
+export AGENT_BASE_URL=http://localhost:11434/v1
+export AGENT_MODEL=your-coding-model
+# Set AGENT_API_KEY only when required by the provider.
 mvn -q package -DskipTests
 ```
 
+The workflow safely stops incomplete before code generation if no contextual provider is available.
+
 ## Demo sequence
 
-### 1. Start with the ambiguous request
+### 1. Show ambiguity stopping before implementation
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
@@ -29,67 +32,73 @@ java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --logging.level.root=ERROR sdlc run --scenario ambiguous --workspace .
 ```
 
-Copy the printed `run_id`. The run pauses at the requirements checkpoint before implementation planning proceeds. Use this to explain that uncertain assumptions become an explicit human decision rather than silent agent guesses.
+The run pauses at `requirements`; no implementation has been generated. Inspect `status RUN_ID` and `events RUN_ID`, then explain that a vague phrase cannot be approved as a source-change request.
 
-### 2. Inspect the persisted run and audit history
-
-```bash
-java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
-  --spring.main.web-application-type=none --spring.main.banner-mode=off \
-  --logging.level.root=ERROR sdlc status RUN_ID
-
-java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
-  --spring.main.web-application-type=none --spring.main.banner-mode=off \
-  --logging.level.root=ERROR sdlc events RUN_ID
-```
-
-Point out the persisted stage projection, trace ID, checkpoint, and append-only events in `.agentic/state.sqlite3`. The stage artifacts are reviewable JSON under `.agentic/runs/RUN_ID/artifacts/`.
-
-### 3. Record a requirements decision and resume
+### 2. Revise with concrete criteria
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
-  --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint requirements \
-  --actor "Reviewer" \
-  --rationale "Accept optional expiry and aggregate analytics without visitor identifiers."
+  --logging.level.root=ERROR sdlc revise RUN_ID --actor "Product owner" \
+  --request "Add expiry and privacy-preserving click analytics." \
+  --acceptance-criteria "Expired links return HTTP 410||Click counts are available without storing visitor IP addresses"
 
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-The workflow builds an implementation map, then runs tests, security review, and documentation as independent stages before joining at release readiness. The reference agents are deterministic and offline; the implementation stage does not write source code.
+The previous request and stage artifacts are preserved under `.agentic/runs/RUN_ID/revisions/`. The model receives the updated criteria and repository evidence, then proposes source and test changes.
 
-### 4. Approve local promotion and inspect the result
+### 3. Review and approve the exact candidate diff
 
-When the run reaches the separate release checkpoint, record the decision and resume:
+At `pending_checkpoint: changes`, inspect `.agentic/runs/RUN_ID/artifacts/implementation.json`. It contains the complete diff, changed files, `AC-*` traceability, risks, test plan, and proposal hash. Approve the same proposal:
+
+```bash
+java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
+  --spring.main.web-application-type=none --spring.main.banner-mode=off \
+  --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint changes \
+  --actor "Reviewer" --rationale "I reviewed the source diff, criterion links, risks, and test plan."
+
+java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
+  --spring.main.web-application-type=none --spring.main.banner-mode=off \
+  --logging.level.root=ERROR sdlc resume RUN_ID
+```
+
+The approved operations are applied to `.agentic/runs/RUN_ID/candidate/`; the repository checkout remains unchanged. The fixed Maven runner compiles candidate source and runs the full test suite. On failure, the repair agent receives the output and current candidate source, may make at most two reviewed-scope corrections, and must pass the build again. Security and documentation then run against the validated candidate.
+
+### 4. Review readiness and promote locally
+
+At the `release` checkpoint, inspect `release_readiness.json`, `repair.json`, `security_review.json`, and `engineering_summary.md`. The local promotion copies the verified source and evidence to `.agentic/releases/RUN_ID/` after a second named approval:
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc approve RUN_ID --checkpoint release \
-  --actor "Reviewer" \
-  --rationale "Validation passed; approve local artifact promotion."
+  --actor "Reviewer" --rationale "Build evidence, source review, and residual risks are acceptable."
 
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc resume RUN_ID
 ```
 
-Show the manifest at `.agentic/releases/RUN_ID/manifest.json` and the active pointer at `.agentic/current_release.json`. Promotion is atomic and local; this prototype does not deploy to a cloud environment.
+Promotion updates only `.agentic/current_release.json`. The project has no production deployment tool or credential.
 
-### 5. Exercise rollback and close with trade-offs
+### 5. Show rollback and actual metrics
 
 ```bash
 java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
   --spring.main.web-application-type=none --spring.main.banner-mode=off \
   --logging.level.root=ERROR sdlc rollback-release RUN_ID \
   --actor "Reviewer" --rationale "Demonstrate audited local rollback."
+
+java -jar target/agentic-sdlc-url-shortener-1.0.0.jar \
+  --spring.main.web-application-type=none --spring.main.banner-mode=off \
+  --logging.level.root=ERROR sdlc metrics --workspace .
 ```
 
-Close by distinguishing what is implemented from what production would require: the backend is local and deterministic, persistence is single-node SQLite, and rate limiting is process-local. A provider adapter, isolated build workers, managed persistence, shared rate limiting, stronger security scanning, and a deployment policy would be follow-up work.
+Rollback restores the previous release pointer and reports whether the original source fingerprint still matches. Metrics count actual code-generation calls, Maven executions and failures, repair attempts and recovery duration, and verified rollbacks.
 
 ## Short opening summary
 
-> This Java 17 Spring Boot project pairs a URL shortener with a persistent, governed SDLC workflow prototype. The workflow is a validated DAG with bounded parallel checks, human approval at ambiguity and release boundaries, event history, retry and fallback behavior, and audited local promotion or rollback. Agents produce reviewable artifacts; they do not write arbitrary source code or deploy externally.
+> This Java 17 Spring Boot project combines a URL shortener with a contextual SDLC workflow. It proposes repository-specific source and regression-test changes, binds human approval to the exact diff, validates an isolated candidate, and blocks promotion unless real build evidence passes. The source checkout stays unchanged and the workflow cannot deploy to production.

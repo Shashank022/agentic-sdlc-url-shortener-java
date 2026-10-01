@@ -1,33 +1,43 @@
 # Validation approach
 
-## Automated checks
-
-JUnit covers three layers:
-
-- **Domain tests:** HTTP(S) and local-address rules, alias validation, uniqueness, expiry bounds, atomic click behavior, concurrent increments, and SQLite readiness.
-- **API integration tests:** create/redirect/stats flow, request IDs, health checks, input errors, conflicts, not-found behavior, and `410` expiry behavior against an embedded Spring Boot server.
-- **Orchestration tests:** DAG structure and join, all three scenarios, approvals and denial, retry/fallback, request/source replanning, safe stop, criteria evidence blocking, parallel stage execution, release promotion, and rollback.
-
-The workflow test stage runs the domain and API suites only, avoiding recursive execution of the orchestrator tests. GitHub Actions runs the entire suite separately on pushes and pull requests.
-
-## Local quality gate
+## Repository quality gate
 
 ```bash
 mvn clean test
 mvn verify
 ```
 
-`mvn verify` generates JaCoCo reports and enforces at least 80% line coverage for the Java bundle. The workflow release readiness stage requires its API/domain test run and source policy checks to pass before requesting human release approval.
+`mvn verify` generates JaCoCo reports and enforces the configured line-coverage threshold. GitHub Actions runs `mvn clean verify` for pushes and pull requests.
+
+JUnit covers:
+
+- Domain and API behavior: HTTP(S) target rules, alias validation, expiry, transactional click counts, API errors, health endpoints, request IDs, and SQLite readiness.
+- Patch policy: safe relative paths, allowed Java source/test extensions, criterion links, required generated tests, create/update/delete semantics, and bounded patch size.
+- Candidate safety: brownfield source copy, greenfield Maven-only seed, isolated create/update/delete operations, and unchanged baseline fingerprint.
+- Model adapter: structured request context, provider response parsing, bearer auth, endpoint failures, and malformed output.
+- Orchestration: exact diff approvals, ambiguous requirements, approval denial, actual test evidence policy, bounded repair and revalidation, provider retry/fallback, request/source replanning, revision archives, candidate deletion, source-verified rollback, and metrics from build/repair events.
+
+## Candidate quality gate
+
+After the named reviewer approves the exact implementation diff, the workflow applies changes only below `.agentic/runs/{run_id}/candidate/`. `MavenTestStageRunner` runs:
+
+```text
+mvn --batch-mode --no-transfer-progress test
+```
+
+from that candidate directory. This compiles application and test sources, runs all Maven tests, and captures the command, exit code, duration, and output tail. A fixed timeout and output cap apply. A missing executable, timeout, nonzero exit, missing evidence, or no test file for an acceptance criterion blocks readiness.
+
+If tests fail, the repair agent receives the error output and current candidate source. At most two patch attempts are accepted by default; every repair is path/criterion checked and followed by a new build/test execution. The original workspace is never repaired in place. Exhaustion blocks readiness and discards the candidate.
 
 ## Manual review checklist
 
-1. Confirm normalized requirements and open questions.
-2. Review the dependency plan and architecture decisions before resolving ambiguous assumptions.
-3. Check the brownfield assessment identifies Java routes and impacted modules.
-4. Inspect test output, policy findings, and the generated engineering summary.
-5. Check the release manifest and approval actor/rationale.
-6. Exercise stop, replan, and rollback; confirm each leaves an audit event.
+1. Confirm intake preserves submitted criteria and ambiguous requests pause.
+2. Check repository evidence identifies classes, methods, routes, imports, and existing test files.
+3. Inspect the proposed complete-file diff, rationale, acceptance-criterion IDs, risks, and generated test plan before approving `changes`.
+4. Verify the command, exit code, output tail, repair history, candidate security checks, and generated summary.
+5. Confirm readiness is policy-derived and the release manifest records the second approval.
+6. Exercise a request replan, stop, denied diff, exhausted repair, and release rollback; check revision archives and audit events.
 
 ## Known validation limits
 
-The security review is intentionally small and deterministic; it is not a compliance claim or a replacement for independent security testing. The prototype has no load test, distributed concurrency test, database migration test, dependency vulnerability scan, cloud deployment test, or model evaluation suite.
+The security review is intentionally small and deterministic; it is not a compliance claim or replacement for independent security testing. Candidate builds execute Maven plugins and generated tests, so use trusted repositories and isolated runners. Production use requires stronger OS/container sandboxing, identity-bound approval, resource/network policy, dependency scanning, and provider evaluation. The local development workspace in this session does not include Maven, so the project must be verified by the GitHub Actions CI after push.

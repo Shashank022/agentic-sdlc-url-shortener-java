@@ -1,32 +1,33 @@
 # Risks and trade-offs
 
-| Area | Current choice | Risk or limitation | Production follow-up |
+| Area | Current choice | Risk or limitation | Follow-up |
 | --- | --- | --- | --- |
-| Agent behavior | Deterministic local agents; pluggable `AgentBackend` boundary | Does not demonstrate live model quality or prompt-injection resistance | Add a provider adapter with structured outputs, adversarial evals, timeout budgets, and model/version lineage. |
-| Code changes | Implementation agent emits a map and validates checked-in modules; no arbitrary writes | The workflow validates the prototype rather than autonomously generating a patch | Add isolated worktrees, path allowlists, signed diff review, test sandbox, and human merge approval. |
-| Persistence | SQLite with WAL | Single-node storage and local filesystem durability are not suitable for multi-replica orchestration | Use managed relational storage with transactions, backup, retention, and migrations. |
-| Rate limiting | In-memory sliding window on link creation | Limits reset on restart and differ across service replicas | Use a shared Redis/token-bucket store and trusted proxy identity handling. |
-| Analytics | Aggregate click count and last-access time; no visitor IP | No unique visitors, geographic breakdown, or abuse attribution | Add privacy review, retention policy, consent requirements, and opt-in aggregation. |
-| URL safety | HTTP(S), no embedded credentials, local names and non-public IP literals rejected | Redirect destinations can still host phishing, change DNS later, or redirect elsewhere | Add abuse reporting, domain intelligence, user warnings, and policy review; avoid server-side fetching. |
-| Authentication | Public create, redirect, and stats APIs | Anyone can create links and read per-link aggregate stats | Add identity, ownership, authorization, quotas, abuse controls, and administrative audit. |
-| Orchestrator trust | Agents cannot deploy or write arbitrary source; outputs are size/path checked | Local process and database access are trusted; no multi-tenant isolation | Run workers in isolated containers with resource limits, OS-level filesystem policy, and signed artifact provenance. |
-| Release | Atomic local artifact promotion with manual gate | Not a deployment pipeline and has no external environment rollback | Integrate deployment only after environment policy, staged rollout, health checks, and human authorization are designed. |
-| Security checks | Small source policy scan and automated tests | Not SAST, dependency audit, DAST, or penetration testing | Add pinned dependency lock, SBOM, vulnerability scanning, secret scanning, SAST, DAST, and threat modeling. |
+| Agent reasoning | Optional OpenAI-compatible model; structured JSON stage output and prior-stage context | Results vary by model/version; prompt injection and inaccurate reasoning remain possible | Pin provider/model, add adversarial evals, isolate untrusted repository content, and store provider/model lineage. |
+| Offline fallback | Repository scanner and policy checks, but no fabricated implementation or repair | Runs cannot complete code generation without a provider | Keep incomplete status explicit; add a separately validated local model option when available. |
+| Source changes | Full-file Java create/update/delete in isolated candidate; diff hash bound to approval | Large files make full-file review noisy; malformed code remains possible | Add line-oriented patches, stronger diff UX, and a secure patch format. |
+| Candidate execution | Fixed Maven test command, timeout, output cap, isolated directory | This application-level isolation does not prevent a malicious Maven plugin or test from using host resources/network | Use disposable containers/VMs, non-root users, read-only base images, network restrictions, and resource quotas. |
+| Human approval | Actor and rationale persisted for exact diff and release bundle | CLI accepts an actor string; it does not authenticate identity or enforce roles | Integrate identity, authorization, signed approvals, and separation of duties. |
+| Persistence | SQLite with WAL | Single-node storage and local filesystem durability do not support multi-replica orchestration | Use managed relational storage with transactions, backups, retention, and migrations. |
+| Rate limiting | In-memory sliding window for link creation | Limits reset on restart and differ across replicas | Use a shared Redis/token-bucket store and trusted proxy handling. |
+| Analytics | Aggregate click count and last-access time; no visitor IP | No unique visitors, geographic breakdown, or abuse attribution | Add privacy review, retention policy, and opt-in aggregation. |
+| URL safety | HTTP(S), no embedded credentials, local names and non-public IP literals rejected | Destinations may still host phishing, change DNS, or redirect elsewhere | Add abuse reporting and user warnings; avoid server-side fetching. |
+| Release | Atomic local promotion after human gate | It is not a deployment pipeline and has no external environment rollback | Design deployment only after environment policy, staged rollout, health checks, and authorization are established. |
+| Security checks | Static source checks and candidate tests | Not SAST, dependency audit, DAST, or penetration testing | Add pinned dependency management, SBOM, vulnerability/secret scanning, SAST, DAST, and threat modeling. |
 
-## Security and change-control rules in this prototype
+## Change-control rules
 
-- Only HTTP and HTTPS redirect destinations are accepted; embedded credentials and obvious local targets are rejected.
-- User-controlled values are passed as SQLite parameters, not interpolated into SQL.
-- Click updates run transactionally; redirect responses are not cacheable.
-- The audit store records decisions and output hashes. It never stores the input request as an executable command.
-- Agent outputs have a size cap. Documentation output is restricted to a single approved artifact path.
-- Release readiness checks tests, source policy results, implementation presence, and requirement-gate disposition.
-- A failed check blocks promotion. Approval does not override a failed release-readiness result.
-- No agent has a production credential or cloud deployment tool.
+- Only relative `.java` paths under `src/main/java` and `src/test/java` are accepted from the code-generation provider.
+- Every proposed file must cite valid acceptance-criterion IDs. Every criterion must be represented by at least one generated test file before readiness.
+- The reviewer approves the exact proposal hash before candidate application. Source and test inputs are fingerprinted before each approval.
+- Candidate builds capture the fixed Maven command, exit status, duration, and output. Failed builds cannot pass readiness; each repair must be reapplied and retested.
+- Requirements or source changes archive earlier artifacts, supersede previous approvals, and recalculate downstream work.
+- A failed check blocks promotion. Release approval cannot override failed readiness.
+- The original checkout remains unchanged by candidate application. Candidate failure or denial deletes the candidate; rollback restores the prior local release pointer and records whether the baseline fingerprint matches.
+- No agent has production credentials or a cloud deployment tool.
 
-## Assumptions
+## Service assumptions
 
 - A custom alias is public and non-sensitive.
-- One redirect is one click; retries by a browser may count as additional clicks.
+- One successful redirect is one click; browser retries may count as additional clicks.
 - Expiry is optional; links without an expiry remain active.
-- The demo's public stats endpoint is acceptable for aggregate counts. Production access control and retention need product requirements.
+- The demo's public stats endpoint is acceptable for aggregate counts. Production needs access control and retention requirements.

@@ -2,39 +2,42 @@
 
 ## Objective and result
 
-This Java 17 / Spring Boot prototype turns a software request into normalized requirements, a dependency-aware plan, architecture decisions, an implementation map, validation evidence, documentation, and a locally promoted release bundle. It also includes a runnable URL shortener with click analytics, optional expiry, alias validation, health checks, and request rate limiting.
+This Java 17 / Spring Boot project pairs a URL shortener with a governed engineering workflow. With an OpenAI-compatible provider configured, a run carries the requirement and inspected repository context through planning, design, source/test proposal, exact-diff human approval, isolated candidate application, Maven validation, bounded failure repair, security review, documentation, and local promotion approval.
 
-## Plan and rationale
+The original checkout remains unchanged. Greenfield candidates start with the Maven starter only; brownfield candidates copy Maven configuration and `src/` inputs only, leaving unrelated files and credentials outside. The final local release contains the verified candidate and evidence. The workflow has no production deployment capability.
 
-1. Keep the shortener domain logic independently testable behind a small JDBC persistence boundary.
-2. Model SDLC work as a validated DAG so independent checks can run concurrently and join before release.
-3. Persist run/stage state, approvals, leases, and append-only decisions so pauses, resumes, and replans retain lineage.
-4. Pause for human review when requirements are ambiguous and before every release promotion.
-5. Keep provider choice behind `AgentBackend` and keep write/deploy authority in the orchestrator.
+## Design choices
 
-The reference agents are deterministic and require no credentials or external model calls. A future provider adapter can supply model-backed analysis without moving approval or release policy into model output.
+1. Keep shortener domain logic independently testable behind a JDBC persistence boundary.
+2. Model work as a validated DAG, with security review and documentation joining after candidate validation.
+3. Keep provider calls separate from orchestration policy. A provider proposes changes; the orchestrator validates paths, acceptance-criterion links, approval hashes, and validation evidence.
+4. Use a disposable candidate copy for all generated writes. This makes rollback a safe candidate discard and lets the original source fingerprint prove no working-tree change occurred.
+5. Require explicit review of the source diff before apply and of build/security/documentation evidence before promotion.
+6. Preserve prior run artifacts when request or source changes trigger replanning.
+
+The offline backend can inspect repository code and run policy checks. If no model endpoint exists, or model generation fails, code generation and repair report incomplete and the workflow cannot pass readiness.
 
 ## Artifacts
 
 - Spring MVC API, SQLite schema, Maven build, Docker image, and Compose file.
-- DAG, agent roles, persistent orchestrator, Java CLI, approval flow, audit events, bounded retry/fallback, replanning, safe stop, local release promotion, and rollback.
-- Greenfield, brownfield, and ambiguous scenario definitions and walkthroughs.
-- Domain, API integration, graph, and orchestration tests; CI workflow; security guidance; architecture, validation, and risk notes.
+- Contextual OpenAI-compatible agent adapter and conservative offline fallback.
+- Isolated candidate workspace, constrained Java source/test patch model, full Maven test runner, repair loop, and diff-bound approval checkpoints.
+- Persistent DAG orchestrator, SQLite run/event/approval state, source fingerprinting, revision archives, local release bundle and rollback.
+- Greenfield, brownfield, and ambiguous scenario definitions; API examples, interview walkthrough, architecture, validation, and risk documents.
+- JUnit tests for API/domain behavior, DAG lifecycle, source isolation, patch path policy, build evidence, failure repair, replanning, approvals, and rollback.
 
 ## Validation
 
-Run `mvn clean test` for the JUnit suite and `mvn verify` for the JaCoCo 80% line-coverage gate. The workflow test stage executes the shortener domain and API integration suites; the GitHub Actions job runs every test, including orchestration cases. Tests cover validation, redirects, expiry, privacy-safe statistics, concurrent click updates, all workflow gates, parallel stage execution, source/request replanning, retry/fallback, readiness blocking, safe stop, promotion, and rollback.
+The candidate runner executes `mvn --batch-mode --no-transfer-progress test` from the candidate directory with a bounded timeout. It stores command, exit code, elapsed duration, and captured output. Missing Maven, timeout, nonzero exit, absent evidence, absent criterion-linked tests, failed security policy, or missing final documentation blocks release readiness. Build failures are forwarded to repair, which must apply a constrained patch and rerun the same test command within the configured attempt limit.
 
-## Assumptions and trade-offs
+The repository quality gate is `mvn clean verify`; GitHub Actions enforces the same build and JaCoCo coverage threshold. Local Maven is not bundled; see `docs/validation.md` for exact checks.
 
-- Short links accept HTTP(S) targets only; the service never fetches the destination itself.
-- Expiry is optional. Click analytics count successful redirects and do not retain visitor IP addresses.
-- SQLite and a process-local rate limiter keep the prototype self-contained; neither targets multi-replica production scale.
-- The implementation stage produces an impact map and validates checked-in code; agents cannot modify arbitrary source files.
-- Release promotion is an atomic local artifact operation, not a production deployment.
+## Trade-offs and limits
 
-## Risks and limits
-
-The policy scan is a small deterministic source check, not SAST or a security certification. The service has no user authentication, abuse-review workflow, distributed rate limiting, load test, external telemetry backend, or cloud deployment integration. Unmapped acceptance criteria and unsupported performance targets block readiness instead of being assumed satisfied.
+- Model output quality depends on the selected provider/model. Structured output parsing, path policy, full candidate build, tests, static source scan, and two human gates are required, but not a substitute for secure isolated execution or code review.
+- The current candidate builder uses complete-file Java create/update/delete operations, not line-oriented patch hunks. The reviewer sees the generated full-file diff before approval.
+- The runner does not authenticate approval identities; the CLI records actor and rationale but production needs identity/authorization integration.
+- SQLite and the shortener's process-local rate limiter are single-node choices.
+- The static scanner is not SAST, dependency scanning, DAST, or penetration testing. No deployment tool, external telemetry, load test, or production environment rollback is included.
 
 See [Architecture](architecture.md), [Risk and trade-offs](risk-and-tradeoffs.md), and [Validation](validation.md) for details.
