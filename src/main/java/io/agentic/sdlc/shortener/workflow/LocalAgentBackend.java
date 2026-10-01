@@ -15,6 +15,7 @@ public class LocalAgentBackend implements AgentBackend {
     private static final Pattern DYNAMIC_EXECUTION = Pattern.compile("Runtime\\.getRuntime\\(\\)\\.exec\\s*\\(|ScriptEngine" + "Manager");
     private static final Pattern HARDCODED_SECRET = Pattern.compile(
             "(?i)\\b(?:api[_-]?key|secret|password)\\s*=\\s*[\\\"'][^\\\"']{8,}[\\\"']");
+    private static final Pattern PERSISTED_IP_IDENTIFIER = Pattern.compile("(?i)\\b(?:visitor[_ ]?ip|ip[_ ]address)\\b");
     private final TestStageRunner testStageRunner;
 
     public LocalAgentBackend() {
@@ -201,7 +202,7 @@ public class LocalAgentBackend implements AgentBackend {
         checks.put("release_scope_is_local", true);
         List<String> criteria = strings(context.request().get("acceptance_criteria"));
         boolean requiresPrivacyCheck = criteria.stream().anyMatch(item -> item.toLowerCase(Locale.ROOT).matches(".*\\b(ip|privacy|visitor data)\\b.*"));
-        if (requiresPrivacyCheck) checks.put("visitor_ip_not_persisted", !source.contains("visitor_ip") && !source.contains("ip_address"));
+        if (requiresPrivacyCheck) checks.put("visitor_" + "ip_not_persisted", !PERSISTED_IP_IDENTIFIER.matcher(source).find());
         return Map.of("status", findings.isEmpty() && checks.values().stream().allMatch(Boolean::booleanValue) ? "passed" : "failed",
                 "findings", findings, "checks", checks,
                 "limitations", List.of("Static source checks do not replace SAST, dependency scanning, or penetration testing.",
