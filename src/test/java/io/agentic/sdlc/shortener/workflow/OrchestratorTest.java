@@ -167,7 +167,7 @@ class OrchestratorTest {
                     return Map.of("status", "proposed", "diagnosis", "Correct the generated state accessor.",
                             "changes", List.of(change("src/main/java/io/agentic/sdlc/shortener/generated/RunMarker.java", "update",
                                     "package io.agentic.sdlc.shortener.generated; public class RunMarker { public String state() { return \"fixed\"; } }\n",
-                                    List.of("AC-1"), "Fix the compiler error reported by the candidate build."))));
+                                    List.of("AC-1"), "Fix the compiler error reported by the candidate build.")));
                 }
                 return super.execute(stageId, context);
             }
