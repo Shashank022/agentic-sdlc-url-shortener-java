@@ -68,6 +68,12 @@ class LocalAgentBackendTest {
                 "apply_changes", Map.of("baseline_modified", false))));
         assertEquals("passed", security.get("status"));
         assertTrue(((List<?>) security.get("findings")).isEmpty());
+        Files.writeString(root.resolve("link/PrivacyRepository.java"), "class PrivacyRepository { String ip_address; }");
+        Map<String, Object> privacyViolation = agent.execute("security_review", context("brownfield",
+                Map.of("acceptance_criteria", List.of("Expose statistics without persisting visitor IP addresses.")),
+                Map.of("apply_changes", Map.of("baseline_modified", false))));
+        assertEquals("failed", privacyViolation.get("status"));
+        assertEquals(false, ((Map<?, ?>) privacyViolation.get("checks")).get("visitor_ip_not_persisted"));
         Map<String, Object> validation = Map.of("status", "passed", "exit_code", 0, "command", List.of("mvn", "test"), "output_tail", "BUILD SUCCESS");
         Map<String, Object> blocked = agent.execute("release_readiness", context("greenfield", Map.of(), Map.of(
                 "tests", Map.of("status", "failed", "exit_code", 1), "repair", Map.of("status", "failed", "final_validation", Map.of("status", "failed", "exit_code", 1)),
