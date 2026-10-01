@@ -1157,6 +1157,14 @@ public class Orchestrator {
         return value instanceof List<?> values ? values : List.of();
     }
 
+    private static List<String> strings(Object value) {
+        List<String> result = new ArrayList<>();
+        for (Object item : asList(value)) {
+            if (item != null) result.add(String.valueOf(item));
+        }
+        return List.copyOf(result);
+    }
+
     private static long elapsed(long started) {
         return (System.nanoTime() - started) / 1_000_000;
     }
