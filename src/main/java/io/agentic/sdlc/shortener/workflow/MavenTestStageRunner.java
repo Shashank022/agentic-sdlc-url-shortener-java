@@ -9,10 +9,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-/** Runs the checked-in shortener test suites with a fixed executable and a bounded timeout. */
+/** Compiles and runs every Maven test in the isolated candidate with a fixed executable and bounded timeout. */
 public class MavenTestStageRunner implements TestStageRunner {
-    private static final List<String> COMMAND = List.of("mvn", "--batch-mode", "--no-transfer-progress", "-q",
-            "-Dtest=ShortenerServiceTest,LinkApiIntegrationTest", "test");
+    private static final List<String> COMMAND = List.of("mvn", "--batch-mode", "--no-transfer-progress", "test");
     private final List<String> command;
     private final Duration timeout;
 

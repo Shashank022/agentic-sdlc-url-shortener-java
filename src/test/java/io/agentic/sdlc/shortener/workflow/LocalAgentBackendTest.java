@@ -45,14 +45,14 @@ class LocalAgentBackendTest {
         Map<String, Object> intake = Map.of("acceptance_criteria", List.of());
         Map<String, Object> plan = agent.execute("decomposition", context("ambiguous", Map.of(), Map.of("intake", intake)));
         assertEquals(true, plan.get("blocked_by_human"));
-        assertEquals(6, ((List<?>) plan.get("tasks")).size());
+        assertEquals(3, ((List<?>) plan.get("tasks")).size());
         assertTrue(((List<?>) plan.get("parallel_work")).get(0).toString().contains("join"));
         Map<String, Object> architecture = agent.execute("architecture", context("greenfield", Map.of(), Map.of()));
         assertEquals(4, ((List<?>) architecture.get("components")).size());
         Map<String, Object> implementation = agent.execute("implementation", context("greenfield",
                 request(List.of("Create a versioned HTTP API.", "Redirect p95 latency below 100 ms.")), Map.of()));
-        assertFalse(((List<?>) implementation.get("missing_modules")).isEmpty());
-        assertEquals(1, ((List<?>) implementation.get("unmapped_criteria")).size());
+        assertEquals("incomplete", implementation.get("status"));
+        assertFalse(Boolean.TRUE.equals(implementation.get("source_editing")));
     }
 
     @Test
@@ -64,18 +64,19 @@ class LocalAgentBackendTest {
         Files.writeString(root.resolve("link/ShortenerService.java"), "equalsIgnoreCase(\"http\") equalsIgnoreCase(\"https\") BEGIN IMMEDIATE UPDATE links SET click_count");
         Files.writeString(root.resolve("link/Database.java"), "CREATE TABLE links(code TEXT)");
         Files.writeString(root.resolve("workflow/Detector.java"), "class Detector { String rule = \"ScriptEngine\" + \"Manager\"; }");
-        Map<String, Object> implementation = Map.of("write_boundary", "Read-only inspection; this stage does not edit application source.");
-        Map<String, Object> security = agent.execute("security_review", context("greenfield", Map.of(), Map.of("implementation", implementation)));
+        Map<String, Object> security = agent.execute("security_review", context("greenfield", Map.of(), Map.of(
+                "apply_changes", Map.of("baseline_modified", false))));
         assertEquals("passed", security.get("status"));
         assertTrue(((List<?>) security.get("findings")).isEmpty());
+        Map<String, Object> validation = Map.of("status", "passed", "exit_code", 0, "command", List.of("mvn", "test"), "output_tail", "BUILD SUCCESS");
         Map<String, Object> blocked = agent.execute("release_readiness", context("greenfield", Map.of(), Map.of(
-                "tests", Map.of("status", "failed"), "security_review", security,
-                "implementation", Map.of("missing_modules", List.of(), "unmapped_criteria", List.of(), "result", "mapped"),
+                "tests", Map.of("status", "failed", "exit_code", 1), "repair", Map.of("status", "failed", "final_validation", Map.of("status", "failed", "exit_code", 1)),
+                "security_review", security, "implementation", Map.of("criterion_traceability", List.of()),
                 "intake", Map.of("open_questions", List.of()), "requirement_approval", Map.of())));
         assertEquals("blocked", blocked.get("decision"));
         Map<String, Object> ready = agent.execute("release_readiness", context("greenfield", Map.of(), Map.of(
-                "tests", Map.of("status", "passed"), "security_review", security,
-                "implementation", Map.of("missing_modules", List.of(), "unmapped_criteria", List.of(), "result", "mapped"),
+                "tests", validation, "repair", Map.of("status", "not_needed", "final_validation", validation),
+                "security_review", security, "implementation", Map.of("criterion_traceability", List.of()),
                 "intake", Map.of("open_questions", List.of()), "requirement_approval", Map.of())));
         assertEquals("ready_for_human_review", ready.get("decision"));
         assertEquals(false, agent.execute("release_promotion", context("greenfield", Map.of(), Map.of())).get("external_deployment"));
@@ -83,27 +84,13 @@ class LocalAgentBackendTest {
 
     @Test
     void emitsEngineeringSummaryAndUsesInjectedTestStageRunner() throws Exception {
-        createRequiredModules();
         LocalAgentBackend agent = new LocalAgentBackend(path -> Map.of("status", "passed", "exit_code", 0));
         Map<String, Object> summary = agent.execute("documentation", context("greenfield", Map.of(), Map.of(
                 "intake", Map.of("title", "Demo", "normalized_problem", "Build links.", "acceptance_criteria", List.of("Create links.")),
                 "architecture", Map.of("components", List.of(Map.of("name", "API", "responsibility", "Serve requests."))))));
         assertTrue(String.valueOf(summary.get("markdown")).contains("# Engineering summary: Demo"));
         assertEquals("passed", agent.execute("tests", context("greenfield", Map.of(), Map.of())).get("status"));
-        assertEquals("mapped", agent.execute("implementation", context("greenfield", request(List.of("Create a versioned API.")), Map.of())).get("result"));
-    }
-
-    private void createRequiredModules() throws Exception {
-        for (String path : List.of(
-                "src/main/java/io/agentic/sdlc/shortener/api/LinkController.java",
-                "src/main/java/io/agentic/sdlc/shortener/api/RedirectController.java",
-                "src/main/java/io/agentic/sdlc/shortener/link/ShortenerService.java",
-                "src/main/java/io/agentic/sdlc/shortener/link/Database.java",
-                "src/main/java/io/agentic/sdlc/shortener/workflow/Orchestrator.java")) {
-            Path file = workspace.resolve(path);
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, "// fixture\n");
-        }
+        assertEquals("incomplete", agent.execute("implementation", context("greenfield", request(List.of("Create a versioned API.")), Map.of())).get("status"));
     }
 
     private AgentContext context(String scenario, Map<String, Object> request, Map<String, Map<String, Object>> outputs) {

@@ -10,14 +10,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-/** Offline deterministic reference agents; policy, approvals, and promotion remain in the orchestrator. */
+/** Offline repository inspector and policy support. Source generation requires a contextual model provider. */
 public class LocalAgentBackend implements AgentBackend {
-    private static final List<String> REQUIRED_MODULES = List.of(
-            "src/main/java/io/agentic/sdlc/shortener/api/LinkController.java",
-            "src/main/java/io/agentic/sdlc/shortener/api/RedirectController.java",
-            "src/main/java/io/agentic/sdlc/shortener/link/ShortenerService.java",
-            "src/main/java/io/agentic/sdlc/shortener/link/Database.java",
-            "src/main/java/io/agentic/sdlc/shortener/workflow/Orchestrator.java");
     private static final Pattern DYNAMIC_EXECUTION = Pattern.compile("Runtime\\.getRuntime\\(\\)\\.exec\\s*\\(|ScriptEngine" + "Manager");
     private static final Pattern HARDCODED_SECRET = Pattern.compile(
             "(?i)\\b(?:api[_-]?key|secret|password)\\s*=\\s*[\\\"'][^\\\"']{8,}[\\\"']");
@@ -40,6 +34,7 @@ public class LocalAgentBackend implements AgentBackend {
             case "architecture" -> architecture();
             case "implementation" -> implementation(context);
             case "tests" -> testStageRunner.run(context.workspace());
+            case "repair" -> Map.of("status", "incomplete", "reason", "Offline inspection cannot safely synthesize a repair patch.", "changes", List.of());
             case "security_review" -> securityReview(context);
             case "documentation" -> documentation(context);
             case "release_readiness" -> releaseReadiness(context);
@@ -74,8 +69,11 @@ public class LocalAgentBackend implements AgentBackend {
                     "data_flow", List.of("HTTP request", "validation", "SQLite", "redirect or analytics response"));
         }
         Path root = context.workspace().resolve("src/main/java");
+        Path testsRoot = context.workspace().resolve("src/test/java");
         List<Map<String, Object>> modules = new ArrayList<>();
         List<String> routes = new ArrayList<>();
+        Map<String, List<String>> classToFile = new LinkedHashMap<>();
+        List<Map<String, Object>> testInventory = new ArrayList<>();
         if (Files.exists(root)) {
             try (var paths = Files.walk(root)) {
                 for (Path path : paths.filter(item -> item.toString().endsWith(".java")).sorted().toList()) {
@@ -83,7 +81,10 @@ public class LocalAgentBackend implements AgentBackend {
                     String source = Files.readString(path);
                     List<String> imports = source.lines().filter(line -> line.stripLeading().startsWith("import "))
                             .map(String::strip).distinct().limit(20).toList();
-                    modules.add(Map.of("path", relative, "imports", imports));
+                    List<String> classes = matches(source, "\\b(?:class|interface|enum|record)\\s+(\\w+)");
+                    List<String> methods = matches(source, "(?m)\\b(?:public|protected|private)\\s+(?:static\\s+)?[\\w<>?,.\\[\\] ]+\\s+(\\w+)\\s*\\([^;{}]*\\)\\s*(?:throws [^{]+)?\\{");
+                    modules.add(Map.of("path", relative, "imports", imports, "classes", classes, "methods", methods));
+                    classes.forEach(name -> classToFile.computeIfAbsent(name, ignored -> new ArrayList<>()).add(relative));
                     var matcher = Pattern.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\\"([^\\\"]*)\\\"\\))?").matcher(source);
                     while (matcher.find()) {
                         String route = matcher.group(2);
@@ -92,23 +93,61 @@ public class LocalAgentBackend implements AgentBackend {
                 }
             }
         }
+        if (Files.exists(testsRoot)) {
+            try (var paths = Files.walk(testsRoot)) {
+                for (Path path : paths.filter(item -> item.toString().endsWith(".java")).sorted().toList()) {
+                    String source = Files.readString(path);
+                    testInventory.add(Map.of("path", context.workspace().relativize(path).toString().replace('\\', '/'),
+                            "classes", matches(source, "\\bclass\\s+(\\w+)"),
+                            "test_methods", matches(source, "(?m)@Test\\s+(?:void\\s+)?(\\w+)\\s*\\(")));
+                }
+            }
+        }
+        List<String> dependencies = new ArrayList<>();
+        for (Map<String, Object> module : modules) {
+            String path = String.valueOf(module.get("path"));
+            for (Object className : (List<?>) module.get("classes")) {
+                for (String target : classToFile.getOrDefault(String.valueOf(className), List.of())) {
+                    if (!target.equals(path)) dependencies.add(path + " -> " + target);
+                }
+            }
+        }
+        String criteriaText = String.join(" ", strings(context.request().get("acceptance_criteria"))).toLowerCase(Locale.ROOT);
+        List<String> likelyImpacts = modules.stream().filter(module -> {
+            String path = String.valueOf(module.get("path")).toLowerCase(Locale.ROOT);
+            return criteriaText.split("\\W+").length > 0 && java.util.Arrays.stream(criteriaText.split("\\W+"))
+                    .filter(token -> token.length() > 3).anyMatch(path::contains);
+        }).map(module -> String.valueOf(module.get("path"))).toList();
         return Map.of("mode", "brownfield", "baseline_found", !modules.isEmpty(), "modules", modules,
                 "api_routes", routes.stream().distinct().toList(),
-                "data_flow", List.of("Spring MVC endpoint", "shortener domain service", "SQLite repository", "HTTP response"),
-                "impact_summary", "Changes primarily affect the API, link service, database, and workflow tests.");
+                "tests", testInventory, "class_to_file", classToFile, "dependency_paths", dependencies.stream().distinct().toList(),
+                "likely_impacted_files", likelyImpacts,
+                "data_flow", routes.isEmpty() ? List.of("No annotated Spring MVC routes were found.") : List.of("Spring MVC route annotations found: " + routes.stream().distinct().toList()));
     }
 
     private Map<String, Object> decomposition(AgentContext context) {
-        List<Map<String, Object>> tasks = List.of(
-                Map.of("id", "T1", "task", "Normalize scope and acceptance criteria", "depends_on", List.of(), "owner", "requirements", "deliverable", "requirement.json"),
-                Map.of("id", "T2", "task", "Map impacted API, service, and persistence modules", "depends_on", List.of("T1"), "owner", "codebase", "deliverable", "codebase_assessment.json"),
-                Map.of("id", "T3", "task", "Define the API contract, data model, and safety decisions", "depends_on", List.of("T1", "T2"), "owner", "architect", "deliverable", "architecture.json"),
-                Map.of("id", "T4", "task", "Implement only changes covered by approved criteria", "depends_on", List.of("T3", "requirement_approval"), "owner", "engineer", "deliverable", "implementation_map.json"),
-                Map.of("id", "T5", "task", "Run regression, API, and security checks", "depends_on", List.of("T4"), "owner", "test-and-security", "deliverable", "validation.json"),
-                Map.of("id", "T6", "task", "Generate the engineering summary and release decision", "depends_on", List.of("T5"), "owner", "release", "deliverable", "engineering_summary.md"));
-        boolean blocked = strings(context.request().get("acceptance_criteria")).isEmpty();
-        return Map.of("tasks", tasks, "critical_path", List.of("T1", "T2", "T3", "T4", "T5", "T6"),
-                "parallel_work", List.of("Tests, security review, and documentation join before release readiness."),
+        List<String> criteria = strings(context.priorOutputs().getOrDefault("intake", Map.of()).get("acceptance_criteria"));
+        List<Map<String, Object>> tasks = new ArrayList<>();
+        List<String> path = new ArrayList<>();
+        tasks.add(Map.of("id", "T1", "task", "Inspect repository evidence and identify impacted code/tests",
+                "depends_on", List.of(), "owner", "codebase", "deliverable", "repo_reasoning.json"));
+        path.add("T1");
+        for (int index = 0; index < criteria.size(); index++) {
+            String id = "AC-" + (index + 1);
+            String taskId = "T" + (index + 2);
+            tasks.add(Map.of("id", taskId, "task", "Implement and test: " + criteria.get(index),
+                    "depends_on", List.of("T1"), "owner", "engineer", "deliverable", id,
+                    "criterion_ids", List.of(id)));
+            path.add(taskId);
+        }
+        tasks.add(Map.of("id", "VALIDATE", "task", "Compile, test, and repair the isolated candidate",
+                "depends_on", path.subList(1, path.size()), "owner", "test-and-engineer", "deliverable", "validation.json"));
+        tasks.add(Map.of("id", "DOCS", "task", "Document only the verified candidate and its evidence",
+                "depends_on", List.of("VALIDATE"), "owner", "docs", "deliverable", "engineering_summary.md"));
+        path.addAll(List.of("VALIDATE", "DOCS"));
+        boolean blocked = criteria.isEmpty();
+        return Map.of("tasks", tasks, "critical_path", path,
+                "parallel_work", List.of("Candidate security review and documentation join before release readiness."),
                 "blocked_by_human", blocked);
     }
 
@@ -131,56 +170,49 @@ public class LocalAgentBackend implements AgentBackend {
     }
 
     private Map<String, Object> implementation(AgentContext context) {
-        List<String> existing = REQUIRED_MODULES.stream().filter(path -> Files.exists(context.workspace().resolve(path))).toList();
-        List<String> missing = REQUIRED_MODULES.stream().filter(path -> !Files.exists(context.workspace().resolve(path))).toList();
-        List<String> criteria = strings(context.request().get("acceptance_criteria"));
-        List<Map<String, String>> mapped = new ArrayList<>();
-        List<String> unmapped = new ArrayList<>();
-        for (String criterion : criteria) {
-            String lower = criterion.toLowerCase(Locale.ROOT);
-            String file = mapCriterion(lower);
-            if (file == null) {
-                unmapped.add(criterion);
-            } else {
-                mapped.add(Map.of("criterion", criterion, "module", file, "evidence", "Covered by the Java API/domain tests and policy review."));
-            }
-        }
-        return Map.of("result", missing.isEmpty() ? "mapped" : "incomplete", "modules", existing,
-                "missing_modules", missing, "mapped_criteria", mapped, "unmapped_criteria", unmapped,
-                "write_boundary", "Read-only inspection; this stage does not edit application source.");
+        return Map.of("status", "incomplete", "reason", "Offline mode does not invent source changes. Configure an OpenAI-compatible code model to propose a contextual patch.",
+                "changes", List.of(), "source_editing", false);
     }
 
     private Map<String, Object> securityReview(AgentContext context) throws IOException {
-        Path sourceRoot = context.workspace().resolve("src/main/java/io/agentic/sdlc/shortener");
+        Path sourceRoot = context.workspace().resolve("src/main/java");
         List<Map<String, String>> findings = new ArrayList<>();
-        Map<String, Boolean> checks = new LinkedHashMap<>();
-        String shortener = read(sourceRoot.resolve("link/ShortenerService.java"));
-        String database = read(sourceRoot.resolve("link/Database.java"));
-        try (var paths = Files.walk(sourceRoot)) {
-            for (Path path : paths.filter(file -> file.toString().endsWith(".java")).toList()) {
-                String source = Files.readString(path);
-                if (DYNAMIC_EXECUTION.matcher(source).find()) {
-                    findings.add(Map.of("rule", "dynamic_code_execution", "path", context.workspace().relativize(path).toString(), "severity", "high"));
-                }
-                if (HARDCODED_SECRET.matcher(source).find()) {
-                    findings.add(Map.of("rule", "hardcoded_credential", "path", context.workspace().relativize(path).toString(), "severity", "high"));
+        StringBuilder allSource = new StringBuilder();
+        if (Files.exists(sourceRoot)) {
+            try (var paths = Files.walk(sourceRoot)) {
+                for (Path path : paths.filter(file -> file.toString().endsWith(".java")).toList()) {
+                    String source = Files.readString(path);
+                    allSource.append(source).append('\n');
+                    if (DYNAMIC_EXECUTION.matcher(source).find()) {
+                        findings.add(Map.of("rule", "dynamic_code_execution", "path", context.workspace().relativize(path).toString(), "severity", "high"));
+                    }
+                    if (HARDCODED_SECRET.matcher(source).find()) {
+                        findings.add(Map.of("rule", "hardcoded_credential", "path", context.workspace().relativize(path).toString(), "severity", "high"));
+                    }
                 }
             }
         }
-        checks.put("http_only_redirect_targets", shortener.contains("equalsIgnoreCase(\"http\")") && shortener.contains("equalsIgnoreCase(\"https\")"));
-        checks.put("click_update_uses_sqlite_transaction", shortener.contains("BEGIN IMMEDIATE") && shortener.contains("UPDATE links SET click_count"));
-        checks.put("visitor_ip_not_persisted", !database.toLowerCase(Locale.ROOT).contains("visitor_ip") && !database.toLowerCase(Locale.ROOT).contains("ip_address"));
+        String source = allSource.toString().toLowerCase(Locale.ROOT);
+        Map<String, Boolean> checks = new LinkedHashMap<>();
+        checks.put("dynamic_execution_absent", findings.stream().noneMatch(item -> item.get("rule").equals("dynamic_code_execution")));
+        checks.put("hardcoded_credentials_absent", findings.stream().noneMatch(item -> item.get("rule").equals("hardcoded_credential")));
+        checks.put("candidate_isolated_from_baseline", Boolean.FALSE.equals(context.priorOutputs()
+                .getOrDefault("apply_changes", Map.of()).get("baseline_modified")));
         checks.put("release_scope_is_local", true);
-        checks.put("agents_do_not_write_source", "Read-only inspection; this stage does not edit application source."
-                .equals(context.priorOutputs().getOrDefault("implementation", Map.of()).get("write_boundary")));
+        List<String> criteria = strings(context.request().get("acceptance_criteria"));
+        boolean requiresPrivacyCheck = criteria.stream().anyMatch(item -> item.toLowerCase(Locale.ROOT).matches(".*\\b(ip|privacy|visitor data)\\b.*"));
+        if (requiresPrivacyCheck) checks.put("visitor_ip_not_persisted", !source.contains("visitor_ip") && !source.contains("ip_address"));
         return Map.of("status", findings.isEmpty() && checks.values().stream().allMatch(Boolean::booleanValue) ? "passed" : "failed",
                 "findings", findings, "checks", checks,
-                "limitations", List.of("This deterministic scan is not a substitute for SAST, dependency scanning, or penetration testing."));
+                "limitations", List.of("Static source checks do not replace SAST, dependency scanning, or penetration testing.",
+                        "Acceptance behavior is validated by generated regression tests and the Maven build."));
     }
 
     private Map<String, Object> documentation(AgentContext context) {
         Map<String, Object> intake = context.priorOutputs().getOrDefault("intake", Map.of());
         Map<String, Object> architecture = context.priorOutputs().getOrDefault("architecture", Map.of());
+        Map<String, Object> repair = context.priorOutputs().getOrDefault("repair", Map.of());
+        Map<String, Object> validation = repair.get("final_validation") instanceof Map<?, ?> raw ? (Map<String, Object>) raw : Map.of();
         String title = String.valueOf(intake.getOrDefault("title", "Engineering summary"));
         String request = String.valueOf(intake.getOrDefault("normalized_problem", ""));
         List<String> criteria = strings(intake.get("acceptance_criteria"));
@@ -196,23 +228,37 @@ public class LocalAgentBackend implements AgentBackend {
             Map<?, ?> component = (Map<?, ?>) item;
             lines.add("- **" + component.get("name") + "**: " + component.get("responsibility"));
         }
+        lines.addAll(List.of("", "## Verified implementation"));
+        for (Object item : list(context.priorOutputs().getOrDefault("implementation", Map.of()).get("changed_files"))) {
+            lines.add("- Changed: `" + item + "`");
+        }
+        lines.add("- Candidate validation: `" + validation.getOrDefault("status", "missing") + "` (exit " + validation.getOrDefault("exit_code", "missing") + ").");
+        lines.add("- Validation command: `" + String.join(" ", strings(validation.get("command"))) + "`.");
+        lines.add("- Repair attempts: " + repair.getOrDefault("attempts", 0) + ".");
         lines.addAll(List.of("", "## Release control",
-                "- Local promotion requires a named reviewer and recorded rationale.",
-                "- The agent has no production deployment or external side-effect capability."));
+                "- Named human approval is required before applying the proposal and promoting the local source bundle.",
+                "- Promotion creates a local artifact bundle; it does not deploy to production.",
+                "- Rollback restores the previous local release pointer and discards the isolated candidate."));
         return Map.of("path", "engineering_summary.md", "markdown", String.join("\n", lines) + "\n");
     }
 
     private Map<String, Object> releaseReadiness(AgentContext context) {
-        Map<String, Object> tests = context.priorOutputs().getOrDefault("tests", Map.of());
+        Map<String, Object> repair = context.priorOutputs().getOrDefault("repair", Map.of());
+        Map<String, Object> tests = repair.get("final_validation") instanceof Map<?, ?> raw
+                ? map(raw) : context.priorOutputs().getOrDefault("tests", Map.of());
         Map<String, Object> security = context.priorOutputs().getOrDefault("security_review", Map.of());
         Map<String, Object> implementation = context.priorOutputs().getOrDefault("implementation", Map.of());
         Map<String, Object> intake = context.priorOutputs().getOrDefault("intake", Map.of());
         Map<String, Object> requirementApproval = context.priorOutputs().getOrDefault("requirement_approval", Map.of());
         List<String> blockers = new ArrayList<>();
-        if (!"passed".equals(tests.get("status"))) blockers.add("Automated tests did not pass.");
+        if (!"passed".equals(tests.get("status")) || !(tests.get("exit_code") instanceof Number code) || code.intValue() != 0) blockers.add("Candidate compilation/tests did not pass with exit-code evidence.");
         if (!"passed".equals(security.get("status"))) blockers.add("Security policy checks did not pass.");
-        if (!list(implementation.get("missing_modules")).isEmpty()) blockers.add("Expected implementation modules are missing.");
-        if (!list(implementation.get("unmapped_criteria")).isEmpty()) blockers.add("At least one acceptance criterion has no implementation or validation evidence.");
+        if (!("not_needed".equals(repair.get("status")) || "recovered".equals(repair.get("status")))) blockers.add("Bounded repair did not produce a validated candidate.");
+        for (Object item : list(implementation.get("criterion_traceability"))) {
+            if (item instanceof Map<?, ?> criterion && list(criterion.get("test_files")).isEmpty()) {
+                blockers.add("At least one criterion has no generated regression test.");
+            }
+        }
         if (!list(intake.get("open_questions")).isEmpty() && !"approved".equals(requirementApproval.get("decision"))) {
             blockers.add("Requirement questions remain unresolved.");
         }
@@ -220,17 +266,14 @@ public class LocalAgentBackend implements AgentBackend {
                 "blockers", blockers, "release_scope", "local artifact bundle only",
                 "checks", Map.of("tests", tests.getOrDefault("status", "missing"),
                         "security", security.getOrDefault("status", "missing"),
-                        "implementation", implementation.getOrDefault("result", "missing")));
+                        "implementation", implementation.getOrDefault("status", "missing")));
     }
 
-    private static String mapCriterion(String criterion) {
-        if (criterion.contains("p95") || criterion.contains("latency") || criterion.contains("requests per second")) return null;
-        if (criterion.contains("health") || criterion.contains("liveness") || criterion.contains("readiness")) return "api/HealthController.java";
-        if (criterion.contains("redirect") || criterion.contains("click") || criterion.contains("analytics") || criterion.contains("expir")) return "link/ShortenerService.java";
-        if (criterion.contains("target") || criterion.contains("scheme") || criterion.contains("alias") || criterion.contains("unsafe") || criterion.contains("local address") || criterion.contains("malformed")) return "link/ShortenerService.java";
-        if (criterion.contains("test") || criterion.contains("regression") || criterion.contains("automated")) return "src/test/java";
-        if (criterion.contains("api") || criterion.contains("link")) return "api/LinkController.java";
-        return null;
+    private static List<String> matches(String source, String expression) {
+        var matcher = Pattern.compile(expression).matcher(source);
+        List<String> values = new ArrayList<>();
+        while (matcher.find()) values.add(matcher.group(1));
+        return values.stream().distinct().toList();
     }
 
     private static List<String> strings(Object value) {
@@ -248,6 +291,12 @@ public class LocalAgentBackend implements AgentBackend {
 
     private static String read(Path path) throws IOException {
         return Files.exists(path) ? Files.readString(path) : "";
+    }
+
+    private static Map<String, Object> map(Map<?, ?> raw) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
     }
 
 }

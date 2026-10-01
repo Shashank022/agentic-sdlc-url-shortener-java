@@ -298,12 +298,23 @@ public final class WorkflowStore {
         List<Double> latencies = terminal.stream().filter(run -> run.finishedAt != null)
                 .map(run -> Duration.between(Instant.parse(run.createdAt), Instant.parse(run.finishedAt)).toMillis() / 1000.0).toList();
         long rollbackCount = eventsForAll("ROLLBACK_COMPLETED");
+        long codegenAttempts = eventsForAll("CODEGEN_ATTEMPT");
+        long buildExecutions = eventsForAll("BUILD_EXECUTION");
+        long buildFailures = eventCount("BUILD_EXECUTION", "status", "failed");
+        long repairAttempts = eventsForAll("REPAIR_ATTEMPT");
+        long repairRecoveries = eventsForAll("REPAIR_RECOVERED");
+        long verifiedRollbacks = eventCount("ROLLBACK_COMPLETED", "baseline_verified", "true");
         List<Double> recovered = new ArrayList<>();
+        List<Double> repairDurations = new ArrayList<>();
         for (RunState run : runs) {
             for (WorkflowEvent event : events(run.runId)) {
                 if (event.eventType().equals("STAGE_RECOVERED")) {
                     Object value = event.payload().get("recovery_seconds");
                     if (value instanceof Number number) recovered.add(number.doubleValue());
+                }
+                if (event.eventType().equals("REPAIR_RECOVERED")) {
+                    Object value = event.payload().get("elapsed_seconds");
+                    if (value instanceof Number number) repairDurations.add(number.doubleValue());
                 }
             }
         }
@@ -317,6 +328,13 @@ public final class WorkflowStore {
         metrics.put("rollback_count", rollbackCount);
         metrics.put("rollback_frequency", completed == 0 ? null : round((double) rollbackCount / completed, 4));
         metrics.put("mttr_seconds", recovered.isEmpty() ? 0.0 : round(recovered.stream().mapToDouble(Double::doubleValue).average().orElse(0.0), 3));
+        metrics.put("code_generation_attempts", codegenAttempts);
+        metrics.put("build_executions", buildExecutions);
+        metrics.put("build_failures", buildFailures);
+        metrics.put("repair_attempts", repairAttempts);
+        metrics.put("successful_repairs", repairRecoveries);
+        metrics.put("repair_mttr_seconds", repairDurations.isEmpty() ? 0.0 : round(repairDurations.stream().mapToDouble(Double::doubleValue).average().orElse(0.0), 3));
+        metrics.put("verified_source_rollbacks", verifiedRollbacks);
         metrics.put("mean_end_to_end_latency_seconds", latencies.isEmpty() ? 0.0 : round(latencies.stream().mapToDouble(Double::doubleValue).average().orElse(0.0), 3));
         return metrics;
     }
@@ -331,6 +349,16 @@ public final class WorkflowStore {
         } catch (SQLException exception) {
             throw failure("Could not count workflow metrics", exception);
         }
+    }
+
+    private long eventCount(String type, String field, String value) {
+        long matches = 0;
+        for (RunState run : runs()) {
+            for (WorkflowEvent event : events(run.runId)) {
+                if (event.eventType().equals(type) && String.valueOf(event.payload().get(field)).equals(value)) matches++;
+            }
+        }
+        return matches;
     }
 
     private Map<String, Object> decodeMap(String value) {

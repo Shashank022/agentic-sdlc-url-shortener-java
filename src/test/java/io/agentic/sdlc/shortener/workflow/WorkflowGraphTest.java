@@ -13,13 +13,15 @@ class WorkflowGraphTest {
     void defaultGraphIsAcyclicAndJoinsIndependentValidationWork() {
         WorkflowGraph.validate(WorkflowGraph.STAGES);
         var release = WorkflowGraph.byId().get("release_readiness");
-        assertEquals(Set.of("tests", "security_review", "documentation"), Set.copyOf(release.dependencies()));
+        assertEquals(Set.of("repair", "security_review", "documentation"), Set.copyOf(release.dependencies()));
         assertEquals(List.of("intake", "repo_reasoning", "decomposition", "architecture",
-                "requirement_approval", "implementation", "tests", "security_review",
-                "documentation", "release_readiness", "release_approval", "release_promotion"),
+                "requirement_approval", "implementation", "change_approval", "apply_changes",
+                "tests", "repair", "security_review", "documentation", "release_readiness",
+                "release_approval", "release_promotion"),
                 WorkflowGraph.topologicalOrder(WorkflowGraph.STAGES));
         assertTrue(WorkflowGraph.descendants("implementation").containsAll(
-                Set.of("tests", "security_review", "documentation", "release_readiness", "release_promotion")));
+                Set.of("change_approval", "apply_changes", "tests", "repair", "security_review",
+                        "documentation", "release_readiness", "release_promotion")));
     }
 
     @Test
