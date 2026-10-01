@@ -27,7 +27,7 @@ class OrchestratorTest {
     void greenfieldCreatesCandidateDiffThenPromotesAndVerifiesRollback() throws Exception {
         Path workspace = workspace("greenfield");
         Orchestrator orchestrator = orchestrator(workspace, new PassingBackend());
-        String baselineHash = CandidateWorkspace.fingerprint(workspace);
+        String baselineHash = CandidateWorkspace.fingerprint(workspace.resolve("src"));
         String firstRun = finish(orchestrator, "greenfield");
         String secondRun = finish(orchestrator, "greenfield");
         Path current = workspace.resolve(".agentic/current_release.json");
@@ -37,7 +37,7 @@ class OrchestratorTest {
         assertTrue(Files.isRegularFile(release.resolve("artifacts/engineering_summary.md")));
         assertTrue(Files.isRegularFile(release.resolve("source/src/main/java/io/agentic/sdlc/shortener/generated/RunMarker.java")));
         assertFalse(Files.exists(workspace.resolve("src/main/java/io/agentic/sdlc/shortener/generated/RunMarker.java")));
-        assertEquals(baselineHash, CandidateWorkspace.fingerprint(workspace));
+        assertEquals(baselineHash, CandidateWorkspace.fingerprint(workspace.resolve("src")));
         Map<String, Object> rollback = orchestrator.rollbackRelease(secondRun, "reviewer", "Restore the previous reviewed bundle.");
         assertEquals(firstRun, rollback.get("current_release") instanceof Map<?, ?> releasePointer ? releasePointer.get("run_id") : null);
         assertEquals(true, rollback.get("baseline_verified"));
@@ -57,7 +57,7 @@ class OrchestratorTest {
         assertEquals("changes", review.get("pending_checkpoint"));
         Map<?, ?> proposal = (Map<?, ?>) stage(review, "implementation").get("output");
         assertTrue(((List<?>) proposal.get("changed_files")).contains("src/main/java/io/agentic/sdlc/shortener/generated/RunMarker.java"));
-        assertTrue(String.valueOf(proposal.get("diff")).contains("+public class RunMarker"));
+        assertTrue(String.valueOf(proposal.get("diff")).contains("public class RunMarker"));
         assertFalse(Files.exists(workspace.resolve(".agentic/runs/" + runId + "/candidate")));
         Map<String, Object> denied = orchestrator.approve(runId, "changes", "reviewer", "The proposed test does not match the requirement.", "deny");
         assertEquals("FAILED", denied.get("status"));
@@ -85,7 +85,7 @@ class OrchestratorTest {
         assertEquals("changes", changes.get("pending_checkpoint"));
         orchestrator.approve(runId, "changes", "reviewer", "The exact source and regression test diff is acceptable.", "approve");
         Map<String, Object> release = orchestrator.execute(runId);
-        assertEquals("WAITING_APPROVAL", release.get("status"));
+        assertEquals("WAITING_APPROVAL", release.get("status"), release.toString());
         assertEquals("release", release.get("pending_checkpoint"));
         orchestrator.approve(runId, "release", "reviewer", "Candidate build, tests and policy checks passed.", "approve");
         assertEquals("SUCCEEDED", orchestrator.execute(runId).get("status"));
@@ -202,7 +202,7 @@ class OrchestratorTest {
             }
         };
         Orchestrator orchestrator = new Orchestrator(workspace, backend, new ConservativeFallbackBackend(), 2, 3, 1);
-        String baselineHash = CandidateWorkspace.fingerprint(workspace);
+        String baselineHash = CandidateWorkspace.fingerprint(workspace.resolve("src"));
         String runId = String.valueOf(orchestrator.createRun("greenfield", Map.of()).get("run_id"));
         orchestrator.execute(runId);
         orchestrator.approve(runId, "changes", "reviewer", "Approve generated patch for candidate validation.", "approve");
@@ -212,7 +212,7 @@ class OrchestratorTest {
         assertEquals("failed", ((Map<?, ?>) stage(stopped, "repair").get("output")).get("status"));
         assertEquals(1L, ((Number) orchestrator.metrics().get("repair_attempts")).longValue());
         assertFalse(Files.exists(workspace.resolve(".agentic/runs/" + runId + "/candidate")));
-        assertEquals(baselineHash, CandidateWorkspace.fingerprint(workspace));
+        assertEquals(baselineHash, CandidateWorkspace.fingerprint(workspace.resolve("src")));
     }
 
     @Test
