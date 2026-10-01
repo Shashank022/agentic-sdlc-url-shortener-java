@@ -141,7 +141,7 @@ public class LocalAgentBackend implements AgentBackend {
             path.add(taskId);
         }
         tasks.add(Map.of("id", "VALIDATE", "task", "Compile, test, and repair the isolated candidate",
-                "depends_on", path.subList(1, path.size()), "owner", "test-and-engineer", "deliverable", "validation.json"));
+                "depends_on", List.copyOf(path.subList(1, path.size())), "owner", "test-and-engineer", "deliverable", "validation.json"));
         tasks.add(Map.of("id", "DOCS", "task", "Document only the verified candidate and its evidence",
                 "depends_on", List.of("VALIDATE"), "owner", "docs", "deliverable", "engineering_summary.md"));
         path.addAll(List.of("VALIDATE", "DOCS"));
